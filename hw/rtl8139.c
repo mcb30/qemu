@@ -53,6 +53,7 @@
 #include "net.h"
 #include "loader.h"
 #include "sysemu.h"
+#include "range.h"
 
 /* debug RTL8139 card */
 //#define DEBUG_RTL8139 1
@@ -495,6 +496,8 @@ typedef struct RTL8139State {
     QEMUTimer *timer;
     int64_t TimerExpire;
 
+    /* VPD */
+    uint8_t *vpd;
 } RTL8139State;
 
 static void rtl8139_set_next_tctr_time(RTL8139State *s, int64_t current_time);
@@ -1231,7 +1234,7 @@ static void rtl8139_reset(DeviceState *d)
 
     /* set initial state data */
     s->Config0 = 0x0; /* No boot ROM */
-    s->Config1 = 0xC; /* IO mapped and MEM mapped registers available */
+    s->Config1 = 0xe; /* IO mapped and MEM mapped registers available */
     s->Config3 = 0x1; /* fast back-to-back compatible */
     s->Config5 = 0x0;
 
@@ -3319,6 +3322,7 @@ static int pci_rtl8139_uninit(PCIDevice *dev)
 {
     RTL8139State *s = DO_UPCAST(RTL8139State, dev, dev);
 
+    qemu_free(s->vpd);
     cpu_unregister_io_memory(s->rtl8139_mmio_io_addr);
     if (s->cplus_txbuffer) {
         qemu_free(s->cplus_txbuffer);
@@ -3338,6 +3342,68 @@ static NetClientInfo net_rtl8139_info = {
     .cleanup = rtl8139_cleanup,
 };
 
+#define RTL_CAP_VPD 0xdc
+#define RTL_VPD_SIZE 0x100
+#define RTL_VPD_ADDR_MASK ( ( RTL_VPD_SIZE - 1 ) & ~0x03 )
+
+static const uint8_t rtl8139_vpd[RTL_VPD_SIZE] = {
+	/* Offset 0x00 */
+	0x82 /* Product Name */, 0x07, 0x00, /* Length */
+	'r', 't', 'l', '8', '1', '3', '9',
+	/* Offset 0x0a */
+	0x90 /* VPD-R */, 0x33, 0x00, /* Length */
+	0x00, 0x00, 0x00,
+	/* Offset 0x10 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0x20 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0x30 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0x40 */
+	0x91 /* VPD-W */, 0xbc, 0x00, /* Length */
+	'Y', 'A', 0x05, 'a', 'b', 'c', 'd', 'e', /* Asset tag */
+	'R', 'W', 0xb1, /* Remaining RW space */
+	0x00, 0x00,
+	/* Offset 0x50 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0x60 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0x70 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0x80 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0x90 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0xa0 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0xb0 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0xc0 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0xd0 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0xe0 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0xf0 */
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	/* Offset 0xff */
+	0x78 /* End */
+};
+
 static int pci_rtl8139_init(PCIDevice *dev)
 {
     RTL8139State * s = DO_UPCAST(RTL8139State, dev, dev);
@@ -3351,7 +3417,12 @@ static int pci_rtl8139_init(PCIDevice *dev)
     pci_conf[PCI_INTERRUPT_PIN] = 1;    /* interrupt pin 0 */
     /* TODO: start of capability list, but no capability
      * list bit in status register, and offset 0xdc seems unused. */
-    pci_conf[PCI_CAPABILITY_LIST] = 0xdc;
+    pci_set_word(&pci_conf[PCI_STATUS], PCI_STATUS_CAP_LIST);
+    pci_conf[PCI_CAPABILITY_LIST] = RTL_CAP_VPD;
+    pci_conf[RTL_CAP_VPD + PCI_CAP_LIST_ID] = PCI_CAP_ID_VPD;
+
+    s->vpd = qemu_mallocz(RTL_VPD_SIZE);
+    memcpy ( s->vpd, rtl8139_vpd, sizeof ( rtl8139_vpd ) );
 
     /* I/O handler for memory-mapped I/O */
     s->rtl8139_mmio_io_addr =
@@ -3383,6 +3454,40 @@ static int pci_rtl8139_init(PCIDevice *dev)
     return 0;
 }
 
+static void pci_rtl8139_write_config(PCIDevice *dev, uint32_t address,
+				     uint32_t val, int len)
+{
+    RTL8139State * s = DO_UPCAST(RTL8139State, dev, dev);
+    uint8_t *pci_conf;
+    uint8_t *vpd_addr;
+    uint8_t *vpd_data;
+    uint8_t *vpd;
+    unsigned int vpd_address;
+
+    pci_default_write_config(dev, address, val, len );
+
+    if ( ranges_overlap ( address, len, ( RTL_CAP_VPD + PCI_VPD_ADDR ), 2 ) ) {
+	    pci_conf = s->dev.config;
+	    vpd = s->vpd;
+	    vpd_addr = &pci_conf[ RTL_CAP_VPD + PCI_VPD_ADDR ];
+	    vpd_data = &pci_conf[ RTL_CAP_VPD + PCI_VPD_DATA ];
+	    vpd_address = ( pci_get_word ( vpd_addr ) & RTL_VPD_ADDR_MASK );
+	    if ( pci_get_word ( vpd_addr ) & PCI_VPD_ADDR_F ) {
+		    /* VPD write */
+		    pci_set_long ( ( vpd + vpd_address ),
+				   pci_get_long ( vpd_data ) );
+		    pci_set_word ( vpd_addr, ( pci_get_word ( vpd_addr ) &
+					       ~PCI_VPD_ADDR_F ) );
+	    } else {
+		    /* VPD read */
+		    pci_set_long ( vpd_data,
+				   pci_get_long ( vpd + vpd_address ) );
+		    pci_set_word ( vpd_addr, ( pci_get_word ( vpd_addr ) |
+					       PCI_VPD_ADDR_F ) );
+	    }
+    }
+}
+
 static PCIDeviceInfo rtl8139_info = {
     .qdev.name  = "rtl8139",
     .qdev.size  = sizeof(RTL8139State),
@@ -3390,6 +3495,7 @@ static PCIDeviceInfo rtl8139_info = {
     .qdev.vmsd  = &vmstate_rtl8139,
     .init       = pci_rtl8139_init,
     .exit       = pci_rtl8139_uninit,
+    .config_write = pci_rtl8139_write_config,
     .romfile    = "pxe-rtl8139.bin",
     .qdev.props = (Property[]) {
         DEFINE_NIC_PROPERTIES(RTL8139State, conf),
