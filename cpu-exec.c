@@ -218,6 +218,7 @@ int cpu_exec(CPUArchState *env)
 #elif defined(TARGET_PPC)
     env->reserve_addr = -1;
 #elif defined(TARGET_LM32)
+#elif defined(TARGET_M6502)
 #elif defined(TARGET_MICROBLAZE)
 #elif defined(TARGET_MIPS)
 #elif defined(TARGET_OPENRISC)
@@ -647,6 +648,7 @@ int cpu_exec(CPUArchState *env)
 #elif defined(TARGET_SPARC)
 #elif defined(TARGET_PPC)
 #elif defined(TARGET_LM32)
+#elif defined(TARGET_M6502)
 #elif defined(TARGET_M68K)
     cpu_m68k_flush_flags(env, env->cc_op);
     env->cc_op = CC_OP_FLAGS;

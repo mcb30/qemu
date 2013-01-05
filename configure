@@ -933,6 +933,7 @@ alpha-softmmu \
 arm-softmmu \
 cris-softmmu \
 lm32-softmmu \
+m6502-softmmu \
 m68k-softmmu \
 microblaze-softmmu \
 microblazeel-softmmu \
@@ -3857,6 +3858,8 @@ case "$target_arch2" in
   ;;
   lm32)
     target_libs_softmmu="$opengl_libs"
+  ;;
+  m6502)
   ;;
   m68k)
     bflt="yes"

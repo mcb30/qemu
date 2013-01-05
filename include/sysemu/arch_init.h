@@ -20,6 +20,7 @@ enum {
     QEMU_ARCH_XTENSA = 4096,
     QEMU_ARCH_OPENRISC = 8192,
     QEMU_ARCH_UNICORE32 = 0x4000,
+    QEMU_ARCH_M6502 = 0x8000,
 };
 
 extern const uint32_t arch_type;
