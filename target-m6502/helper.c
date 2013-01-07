@@ -21,15 +21,15 @@
 #include "qemu/host-utils.h"
 
 /** A 6502 CPU model */
-struct m6502_model {
+typedef struct {
 	/** Name */
 	const char *name;
 	/** Features */
 	unsigned int features;
-};
+} M6502Model;
 
 /** Known 6502 CPU models */
-static const struct m6502_model m6502_model[] = {
+static const M6502Model m6502_model[] = {
 	{
 		.name = "6502",
 		.features = 0,
@@ -47,7 +47,7 @@ static const struct m6502_model m6502_model[] = {
  * @v fprintf		fprintf() function to use
  */
 void m6502_list ( FILE *f, fprintf_function fprintf ) {
-	const struct m6502_model *model;
+	const M6502Model *model;
 	int i;
 
 	fprintf ( f, "Available CPUs:\n" );
@@ -63,8 +63,8 @@ void m6502_list ( FILE *f, fprintf_function fprintf ) {
  * @v name		Model name
  * @ret model		Model, or NULL if not found
  */
-static const struct m6502_model * m6502_find ( const char *name ) {
-	const struct m6502_model *model;
+static const M6502Model * m6502_find ( const char *name ) {
+	const M6502Model *model;
 	int i;
 
 	for ( i = 0 ; i < ARRAY_SIZE ( m6502_model ) ; i++ ) {
@@ -79,11 +79,12 @@ static const struct m6502_model * m6502_find ( const char *name ) {
  * Initialize CPU
  *
  * @v name		Model name
- * @ret m6502		CPU state
+ * @ret env		CPU state
  */
-struct m6502 * m6502_init ( const char *name ) {
-	const struct m6502_model *model;
-	struct m6502 *m6502;
+CPUM6502State * m6502_init ( const char *name ) {
+	const M6502Model *model;
+	M6502CPU *cpu;
+	CPUM6502State *env;
 	static int tcg_initialized = 0;
 
 	/* Identify model */
@@ -92,11 +93,12 @@ struct m6502 * m6502_init ( const char *name ) {
 		return NULL;
 
 	/* Create CPU */
-	m6502 = M6502_CHECK ( object_new ( TYPE_M6502_CPU ) );
-	m6502->features = model->features;
+	cpu = M6502_CPU ( object_new ( TYPE_M6502_CPU ) );
+	env = &cpu->env;
+	env->features = model->features;
 
 	/* Initialise CPU */
-	qemu_init_vcpu ( m6502 );
+	qemu_init_vcpu ( env );
 
 	/* Initialise TCG, if applicable */
 	if ( tcg_enabled() && ! tcg_initialized ) {
@@ -104,34 +106,38 @@ struct m6502 * m6502_init ( const char *name ) {
 		m6502_translate_init();
 	}
 
-	return m6502;
+	return env;
 }
 
 /**
  * Dump CPU state
  *
- * @v m6502		CPU state
+ * @v env		CPU state
  */
-void m6502_dump_state ( struct m6502 *m6502, FILE *f, fprintf_function fprintf,
+void m6502_dump_state ( CPUM6502State *env, FILE *f, fprintf_function fprintf,
 			int flags ) {
 
 	fprintf ( f, "PC=%04x A=%02x X=%02x Y=%02x S=01%02x "
-		  "P=%02x(%c%c%c%c%c%c%c)\n", m6502->pc, m6502->a, m6502->x,
-		  m6502->y, m6502->s, m6502->p,
-		  ( ( m6502->p & P_N ) ? 'N' : 'n' ),
-		  ( ( m6502->p & P_V ) ? 'V' : 'v' ),
-		  ( ( m6502->p & P_B ) ? 'B' : 'b' ),
-		  ( ( m6502->p & P_D ) ? 'D' : 'd' ),
-		  ( ( m6502->p & P_I ) ? 'I' : 'i' ),
-		  ( ( m6502->p & P_Z ) ? 'Z' : 'z' ),
-		  ( ( m6502->p & P_C ) ? 'C' : 'c' ) );
+		  "P=%02x(%c%c%c%c%c%c%c)\n", env->pc, env->a, env->x,
+		  env->y, env->s, env->p,
+		  ( ( env->p & P_N ) ? 'N' : 'n' ),
+		  ( ( env->p & P_V ) ? 'V' : 'v' ),
+		  ( ( env->p & P_B ) ? 'B' : 'b' ),
+		  ( ( env->p & P_D ) ? 'D' : 'd' ),
+		  ( ( env->p & P_I ) ? 'I' : 'i' ),
+		  ( ( env->p & P_Z ) ? 'Z' : 'z' ),
+		  ( ( env->p & P_C ) ? 'C' : 'c' ) );
 }
 
-void m6502_tlb_fill ( struct m6502 *m6502, target_ulong addr,
+void m6502_tlb_fill ( CPUM6502State *env, target_ulong addr,
 		      int is_write, int mmu_idx, uintptr_t retaddr ) {
 	/* Do nothing */
 }
 
-void m6502_interrupt ( struct m6502 *m6502 ) {
-	cpu_abort ( m6502, "Unhandled interrupt" );
+void m6502_interrupt ( CPUM6502State *env ) {
+	cpu_abort ( env, "Unhandled interrupt" );
+}
+
+hwaddr m6502_get_phys_page_debug ( CPUM6502State *env, target_ulong addr ) {
+    return addr & TARGET_PAGE_MASK;
 }

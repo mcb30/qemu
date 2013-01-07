@@ -20,46 +20,47 @@
 #include "cpu.h"
 #include "qemu-common.h"
 
-static void m6502_reset ( CPUState *cpu ) {
-	struct m6502 *m6502 = M6502_CHECK ( container_of ( cpu, struct m6502,
-							   parent ) );
-	struct m6502_class *class = M6502_CLASS ( m6502 );
+static void m6502_reset ( CPUState *s ) {
+	M6502CPU *cpu = M6502_CPU ( s );
+	M6502CPUClass *mcc = M6502_CPU_GET_CLASS ( cpu );
+	CPUM6502State *env = &cpu->env;
 
 	/* Call parent reset() method */
-	class->parent_reset ( cpu );
+	mcc->parent_reset ( s );
 
 	/* Reset CPU */
-	m6502->a = 0;
-	m6502->x = 0;
-	m6502->y = 0;
-	m6502->p = 0;
-	m6502->s = 0;
-	m6502->pc = 0;
+	env->a = 0;
+	env->x = 0;
+	env->y = 0;
+	env->p = 0;
+	env->s = 0;
+	env->pc = 0;
 }
 
 static void m6502_instance_init ( Object *obj ) {
-	struct m6502 *m6502 = M6502_CHECK ( obj );
+	M6502CPU *cpu = M6502_CPU ( obj );
+	CPUM6502State *env = &cpu->env;
 
-	cpu_exec_init ( m6502 );
-	cpu_reset ( CPU ( m6502 ) );
+	cpu_exec_init ( env );
+	cpu_reset ( CPU ( cpu ) );
 }
 
 static void m6502_class_init ( ObjectClass *oc, void *data ) {
-	struct m6502_class *class = M6502_CLASS_CHECK ( oc );
+	M6502CPUClass *mcc = M6502_CPU_CLASS ( oc );
 	CPUClass *cc = CPU_CLASS ( oc );
 
 	/* Intercept reset() method */
-	class->parent_reset = cc->reset;
+	mcc->parent_reset = cc->reset;
 	cc->reset = m6502_reset;
 }
 
 static const TypeInfo m6502_type_info = {
 	.name = TYPE_M6502_CPU,
 	.parent = TYPE_CPU,
-	.instance_size = sizeof ( struct m6502 ),
+	.instance_size = sizeof ( M6502CPU ),
 	.instance_init = m6502_instance_init,
 	.abstract = false,
-	.class_size = sizeof ( struct m6502_class ),
+	.class_size = sizeof ( M6502CPUClass ),
 	.class_init = m6502_class_init,
 };
 
