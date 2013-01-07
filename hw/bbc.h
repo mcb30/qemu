@@ -1,5 +1,5 @@
 /*
- * MOS Technologies 6502 virtual CPU
+ * Acorn BBC Micro
  *
  * Copyright (C) 2013 Michael Brown <mbrown@fensystems.co.uk>
  *
@@ -17,32 +17,9 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "cpu.h"
-#include "disas/disas.h"
-#include "helper.h"
-#include "tcg-op.h"
+#ifndef HW_BBC_H
+#define HW_BBC_H
 
-#define GEN_HELPER 1
-#include "helper.h"
+#define BBC_RAM_SIZE_B ( 32 * 1024 )
 
-void m6502_translate_init ( void ) {
-
-	printf ( "translate_init()\n" );
-}
-
-void m6502_gen_intermediate_code ( CPUM6502State *env,
-				   struct TranslationBlock *tb ) {
-
-	printf ( "gen_intermediate_code()\n" );
-}
-
-void m6502_gen_intermediate_code_pc ( CPUM6502State *env,
-				      struct TranslationBlock *tb ) {
-
-	printf ( "gen_intermediate_code_pc()\n" );
-}
-
-void m6502_restore_state_to_opc ( CPUM6502State *env,
-				  TranslationBlock *tb, int pc_pos ) {
-    env->pc = tcg_ctx.gen_opc_pc[pc_pos];
-}
+#endif
