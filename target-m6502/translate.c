@@ -25,33 +25,70 @@
 #define GEN_HELPER 1
 #include "helper.h"
 
+#define LOG_DIS( ... ) qemu_log_mask ( CPU_LOG_TB_IN_ASM, ## __VA_ARGS__ )
+
 #define MEM_INDEX 0
 
+typedef struct {
+	/** TCG variable */
+	TCGv_i32 var;
+	/** Name (as used in disassembly) */
+	char name;
+} M6502Register;
+
 static TCGv_ptr cpu_env;
-static TCGv_i32 cpu_a;
-static TCGv_i32 cpu_x;
-static TCGv_i32 cpu_y;
-static TCGv_i32 cpu_p;
-static TCGv_i32 cpu_s;
+static M6502Register cpu_a = { .name = 'A' };
+static M6502Register cpu_x = { .name = 'X' };
+static M6502Register cpu_y = { .name = 'Y' };
+static M6502Register cpu_p = { .name = 'P' };
+static M6502Register cpu_s = { .name = 'S' };
 static TCGv_i32 cpu_pc;
 
 #include "exec/gen-icount.h"
 
+typedef struct DisasContext DisasContext;
+
+/** An instruction definition */
 typedef struct {
+	/** Generate instruction */
+	void ( * gen ) ( DisasContext *dc );
+	/** Destination register (if any) */
+	M6502Register *dest;
+	/** Source register (if any) */
+	M6502Register *src;
+	/** Memory addressing mode (if any) */
+	void ( * mem ) ( DisasContext *dc );
+	/** Length of instruction */
+	size_t len;
+} M6502Instruction;
+
+struct DisasContext {
 	CPUM6502State *env;
 	uint32_t pc;
 
-	uint8_t opcode;
-	TCGv_i32 dest;
-	TCGv_i32 src;
+	const M6502Instruction *insn;
 	TCGv_i32 address;
-} DisasContext;
+	char address_desc[16];
+};
+
+static void m6502_address_desc ( DisasContext *dc, const char *fmt, ... ) {
+	va_list args;
+
+	if ( qemu_loglevel_mask ( CPU_LOG_TB_IN_ASM ) ) {
+		va_start ( args, fmt );
+		vsnprintf ( dc->address_desc, sizeof ( dc->address_desc ),
+			    fmt, args );
+		va_end ( args );
+	}
+}
 
 /* Absolute addressing mode */
 static void m6502_abs ( DisasContext *dc ) {
 	uint16_t base = cpu_lduw_code ( dc->env, ( dc->pc + 1 ) );
 
 	dc->address = tcg_const_i32 ( base );
+
+	m6502_address_desc ( dc, "&%04X", base );
 }
 
 /* Absolute,X addressing mode */
@@ -59,8 +96,10 @@ static void m6502_abs_x ( DisasContext *dc ) {
 	uint16_t base = cpu_lduw_code ( dc->env, ( dc->pc + 1 ) );
 
 	dc->address = tcg_temp_new_i32();
-	tcg_gen_addi_i32 ( dc->address, cpu_x, base );
+	tcg_gen_addi_i32 ( dc->address, cpu_x.var, base );
 	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ADDRESS_MASK );
+
+	m6502_address_desc ( dc, "&%04X,X", base );
 }
 
 /* Absolute,Y addressing mode */
@@ -68,8 +107,10 @@ static void m6502_abs_y ( DisasContext *dc ) {
 	uint16_t base = cpu_lduw_code ( dc->env, ( dc->pc + 1 ) );
 
 	dc->address = tcg_temp_new_i32();
-	tcg_gen_addi_i32 ( dc->address, cpu_y, base );
+	tcg_gen_addi_i32 ( dc->address, cpu_y.var, base );
 	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ADDRESS_MASK );
+
+	m6502_address_desc ( dc, "&%04X,Y", base );
 }
 
 /* Zero-page addressing mode */
@@ -77,6 +118,8 @@ static void m6502_zero ( DisasContext *dc ) {
 	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
 
 	dc->address = tcg_const_i32 ( base );
+
+	m6502_address_desc ( dc, "&%02X", base );
 }
 
 /* Zero-page,X addressing mode */
@@ -84,8 +127,10 @@ static void m6502_zero_x ( DisasContext *dc ) {
 	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
 
 	dc->address = tcg_temp_new_i32();
-	tcg_gen_addi_i32 ( dc->address, cpu_x, base );
+	tcg_gen_addi_i32 ( dc->address, cpu_x.var, base );
 	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ZERO_PAGE_MASK );
+
+	m6502_address_desc ( dc, "&%02X,X", base );
 }
 
 /* Zero-page,Y addressing mode */
@@ -93,8 +138,10 @@ static void m6502_zero_y ( DisasContext *dc ) {
 	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
 
 	dc->address = tcg_temp_new_i32();
-	tcg_gen_addi_i32 ( dc->address, cpu_y, base );
+	tcg_gen_addi_i32 ( dc->address, cpu_y.var, base );
 	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ZERO_PAGE_MASK );
+
+	m6502_address_desc ( dc, "&%02X,Y", base );
 }
 
 /* (Indirect,X) addressing mode */
@@ -102,9 +149,11 @@ static void m6502_ind_x ( DisasContext *dc ) {
 	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
 
 	dc->address = tcg_temp_new_i32();
-	tcg_gen_addi_i32 ( dc->address, cpu_x, base );
+	tcg_gen_addi_i32 ( dc->address, cpu_x.var, base );
 	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ZERO_PAGE_MASK );
 	tcg_gen_qemu_ld16u ( dc->address, dc->address, MEM_INDEX );
+
+	m6502_address_desc ( dc, "(&%02X,X)", base );
 }
 
 /* (Indirect),Y addressing mode */
@@ -113,45 +162,49 @@ static void m6502_ind_y ( DisasContext *dc ) {
 
 	dc->address = tcg_const_i32 ( base );
 	tcg_gen_qemu_ld16u ( dc->address, dc->address, MEM_INDEX );
-	tcg_gen_add_i32 ( dc->address, dc->address, cpu_y );
+	tcg_gen_add_i32 ( dc->address, dc->address, cpu_y.var );
+
+	m6502_address_desc ( dc, "(&%02X),Y", base );
 }
 
 /* LDA, LDX, LDY (immediate) */
 static void m6502_gen_load_imm ( DisasContext *dc ) {
+	M6502Register *dest = dc->insn->dest;
 	uint8_t value;
 
 	value = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
-	tcg_gen_movi_i32 ( dc->dest, value );
+	tcg_gen_movi_i32 ( dest->var, value );
+
+	LOG_DIS ( "&%04X : LD%c #&%02X\n", dc->pc, dest->name, value );
 }
 
 /* LDA, LDX, LDY (memory) */
 static void m6502_gen_load ( DisasContext *dc ) {
-	tcg_gen_qemu_ld8u ( dc->dest, dc->address, MEM_INDEX );
+	M6502Register *dest = dc->insn->dest;
+
+	tcg_gen_qemu_ld8u ( dest->var, dc->address, MEM_INDEX );
+
+	LOG_DIS ( "&%04X : LD%c %s\n", dc->pc, dest->name, dc->address_desc );
 }
 
 /* STA, STX, STY */
 static void m6502_gen_store ( DisasContext *dc ) {
-	tcg_gen_qemu_st8 ( dc->src, dc->address, MEM_INDEX );
+	M6502Register *src = dc->insn->src;
+
+	tcg_gen_qemu_st8 ( src->var, dc->address, MEM_INDEX );
+
+	LOG_DIS ( "&%04X : ST%c %s\n", dc->pc, src->name, dc->address_desc );
 }
 
 /* TAX, TAY, TSX, TXA, TXS, TYA */
 static void m6502_gen_transfer ( DisasContext *dc ) {
-	tcg_gen_mov_i32 ( dc->dest, dc->src );
-}
+	M6502Register *dest = dc->insn->dest;
+	M6502Register *src = dc->insn->src;
 
-/** An instruction definition */
-typedef struct {
-	/** Generate instruction */
-	void ( * gen ) ( DisasContext *dc );
-	/** Destination register (if any) */
-	TCGv_i32 *dest;
-	/** Source register (if any) */
-	TCGv_i32 *src;
-	/** Memory addressing mode (if any) */
-	void ( * mem ) ( DisasContext *dc );
-	/** Length of instruction */
-	size_t len;
-} M6502Instruction;
+	tcg_gen_mov_i32 ( dest->var, src->var );
+
+	LOG_DIS ( "&%04X : T%c%c\n", dc->pc, src->name, dest->name );
+}
 
 /** Instruction table */
 static const M6502Instruction m6502_instructions[256] = {
@@ -208,21 +261,20 @@ static const M6502Instruction m6502_instructions[256] = {
 
 static size_t m6502_gen_instruction ( DisasContext *dc ) {
 	const M6502Instruction *insn;
+	uint8_t opcode;
 
 	/* Fetch and validate opcode */
-	dc->opcode = cpu_ldub_code ( dc->env, dc->pc );
-	insn = &m6502_instructions[dc->opcode];
+	opcode = cpu_ldub_code ( dc->env, dc->pc );
+	dc->insn = insn = &m6502_instructions[opcode];
 	if ( ! insn->gen ) {
+
+		//
+		return 0;
+
 		cpu_abort ( dc->env, "Unknown opcode %02x at %04x\n",
-			    dc->opcode, dc->pc );
+			    opcode, dc->pc );
 		return 0;
 	}
-
-	/* Identify registers, if applicable */
-	if ( insn->src )
-		dc->src = *(insn->src);
-	if ( insn->dest )
-		dc->dest = *(insn->dest);
 
 	/* Generate memory address, if applicable */
 	if ( insn->mem )
@@ -287,16 +339,16 @@ void m6502_translate_init ( void ) {
 	printf ( "translate_init()\n" );
 
 	cpu_env = tcg_global_reg_new_ptr ( TCG_AREG0, "env" );
-	cpu_a = tcg_global_mem_new ( TCG_AREG0,
-				     offsetof ( CPUM6502State, a ), "a" );
-	cpu_x = tcg_global_mem_new ( TCG_AREG0,
-				     offsetof ( CPUM6502State, x ), "x" );
-	cpu_y = tcg_global_mem_new ( TCG_AREG0,
-				     offsetof ( CPUM6502State, y ), "y" );
-	cpu_p = tcg_global_mem_new ( TCG_AREG0,
-				     offsetof ( CPUM6502State, p ), "p" );
-	cpu_s = tcg_global_mem_new ( TCG_AREG0,
-				     offsetof ( CPUM6502State, s ), "s" );
+	cpu_a.var = tcg_global_mem_new ( TCG_AREG0,
+					 offsetof ( CPUM6502State, a ), "a" );
+	cpu_x.var = tcg_global_mem_new ( TCG_AREG0,
+					 offsetof ( CPUM6502State, x ), "x" );
+	cpu_y.var = tcg_global_mem_new ( TCG_AREG0,
+					 offsetof ( CPUM6502State, y ), "y" );
+	cpu_p.var = tcg_global_mem_new ( TCG_AREG0,
+					 offsetof ( CPUM6502State, p ), "p" );
+	cpu_s.var = tcg_global_mem_new ( TCG_AREG0,
+					 offsetof ( CPUM6502State, s ), "s" );
 	cpu_pc = tcg_global_mem_new ( TCG_AREG0,
 				      offsetof ( CPUM6502State, pc ), "pc" );
 }
