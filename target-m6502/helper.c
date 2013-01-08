@@ -131,7 +131,9 @@ void m6502_dump_state ( CPUM6502State *env, FILE *f, fprintf_function fprintf,
 
 void m6502_tlb_fill ( CPUM6502State *env, target_ulong addr,
 		      int is_write, int mmu_idx, uintptr_t retaddr ) {
-	/* Do nothing */
+
+	addr &= TARGET_PAGE_MASK;
+	tlb_set_page ( env, addr, addr, PAGE_BITS, mmu_idx, TARGET_PAGE_SIZE );
 }
 
 void m6502_interrupt ( CPUM6502State *env ) {
