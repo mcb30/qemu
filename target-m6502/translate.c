@@ -42,60 +42,168 @@ typedef struct {
 	uint32_t pc;
 
 	uint8_t opcode;
-	TCGv_i32 reg;
+	TCGv_i32 dest;
+	TCGv_i32 src;
 	TCGv_i32 address;
 } DisasContext;
 
+/* Absolute addressing mode */
+static void m6502_abs ( DisasContext *dc ) {
+	uint16_t base = cpu_lduw_code ( dc->env, ( dc->pc + 1 ) );
+
+	dc->address = tcg_const_i32 ( base );
+}
+
+/* Absolute,X addressing mode */
+static void m6502_abs_x ( DisasContext *dc ) {
+	uint16_t base = cpu_lduw_code ( dc->env, ( dc->pc + 1 ) );
+
+	dc->address = tcg_temp_new_i32();
+	tcg_gen_addi_i32 ( dc->address, cpu_x, base );
+	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ADDRESS_MASK );
+}
+
+/* Absolute,Y addressing mode */
+static void m6502_abs_y ( DisasContext *dc ) {
+	uint16_t base = cpu_lduw_code ( dc->env, ( dc->pc + 1 ) );
+
+	dc->address = tcg_temp_new_i32();
+	tcg_gen_addi_i32 ( dc->address, cpu_y, base );
+	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ADDRESS_MASK );
+}
+
+/* Zero-page addressing mode */
+static void m6502_zero ( DisasContext *dc ) {
+	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
+
+	dc->address = tcg_const_i32 ( base );
+}
+
+/* Zero-page,X addressing mode */
+static void m6502_zero_x ( DisasContext *dc ) {
+	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
+
+	dc->address = tcg_temp_new_i32();
+	tcg_gen_addi_i32 ( dc->address, cpu_x, base );
+	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ZERO_PAGE_MASK );
+}
+
+/* Zero-page,Y addressing mode */
+static void m6502_zero_y ( DisasContext *dc ) {
+	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
+
+	dc->address = tcg_temp_new_i32();
+	tcg_gen_addi_i32 ( dc->address, cpu_y, base );
+	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ZERO_PAGE_MASK );
+}
+
+/* (Indirect,X) addressing mode */
+static void m6502_ind_x ( DisasContext *dc ) {
+	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
+
+	dc->address = tcg_temp_new_i32();
+	tcg_gen_addi_i32 ( dc->address, cpu_x, base );
+	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ZERO_PAGE_MASK );
+	tcg_gen_qemu_ld16u ( dc->address, dc->address, MEM_INDEX );
+}
+
+/* (Indirect),Y addressing mode */
+static void m6502_ind_y ( DisasContext *dc ) {
+	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
+
+	dc->address = tcg_const_i32 ( base );
+	tcg_gen_qemu_ld16u ( dc->address, dc->address, MEM_INDEX );
+	tcg_gen_add_i32 ( dc->address, dc->address, cpu_y );
+}
+
+/* LDA, LDX, LDY (immediate) */
+static void m6502_gen_load_imm ( DisasContext *dc ) {
+	uint8_t value;
+
+	value = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
+	tcg_gen_movi_i32 ( dc->dest, value );
+}
+
+/* LDA, LDX, LDY (memory) */
+static void m6502_gen_load ( DisasContext *dc ) {
+	tcg_gen_qemu_ld8u ( dc->dest, dc->address, MEM_INDEX );
+}
+
+/* STA, STX, STY */
+static void m6502_gen_store ( DisasContext *dc ) {
+	tcg_gen_qemu_st8 ( dc->src, dc->address, MEM_INDEX );
+}
+
+/* TAX, TAY, TSX, TXA, TXS, TYA */
+static void m6502_gen_transfer ( DisasContext *dc ) {
+	tcg_gen_mov_i32 ( dc->dest, dc->src );
+}
+
+/** An instruction definition */
 typedef struct {
 	/** Generate instruction */
 	void ( * gen ) ( DisasContext *dc );
-	/** Register (if any) */
-	TCGv_i32 *reg;
-	/** Addressing mode (if any) */
-	void ( * gen_address ) ( DisasContext *dc );
+	/** Destination register (if any) */
+	TCGv_i32 *dest;
+	/** Source register (if any) */
+	TCGv_i32 *src;
+	/** Memory addressing mode (if any) */
+	void ( * mem ) ( DisasContext *dc );
 	/** Length of instruction */
 	size_t len;
 } M6502Instruction;
 
-static void m6502_absolute ( DisasContext *dc ) {
-
-	dc->address = tcg_const_i32 ( cpu_lduw_code ( dc->env,
-						      ( dc->pc + 1 ) ) );
-}
-
-static void m6502_gen_load_immediate ( DisasContext *dc ) {
-	uint8_t value;
-
-	value = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
-	tcg_gen_movi_i32 ( dc->reg, value );
-}
-
-static void m6502_gen_store ( DisasContext *dc ) {
-	
-	tcg_gen_qemu_st8 ( dc->reg, dc->address, MEM_INDEX );
-}
-
-#if 0
-static void m6502_gen_inc_zeropage_x ( CPUM6502State *env, hwaddr pc ) {
-	TCGv_i32 address = tcg_temp_new_i32();
-	TCGv_i32 value = tcg_temp_new_i32();
-
-	/* Calculate address within zero page */
-	tcg_gen_addi_i32 ( address, cpu_x, cpu_ldub_code ( env, ( pc + 1 ) ) );
-	tcg_gen_andi_i32 ( address, address, 0xff );
-
-	tcg_gen_qemu_ld8u ( value, address, MEM_INDEX );
-	tcg_gen_addi_i32 ( value, value, 1 );
-	tcg_gen_qemu_st8 ( value, address, MEM_INDEX );
-
-	tcg_temp_free_i32 ( value );
-	tcg_temp_free_i32 ( address );
-}
-#endif
-
+/** Instruction table */
 static const M6502Instruction m6502_instructions[256] = {
-	[0x8d] = { m6502_gen_store, &cpu_a, m6502_absolute, 3 },
-	[0xa9] = { m6502_gen_load_immediate, &cpu_a, NULL, 2 },
+	/* LDA */
+	[0xa9] = { m6502_gen_load_imm,	&cpu_a,	NULL,	NULL,		2 },
+	[0xa5] = { m6502_gen_load,	&cpu_a,	NULL,	m6502_zero,	2 },
+	[0xb5] = { m6502_gen_load,	&cpu_a,	NULL,	m6502_zero_x,	2 },
+	[0xad] = { m6502_gen_load,	&cpu_a,	NULL,	m6502_abs,	3 },
+	[0xbd] = { m6502_gen_load,	&cpu_a,	NULL,	m6502_abs_x,	3 },
+	[0xb9] = { m6502_gen_load,	&cpu_a,	NULL,	m6502_abs_y,	3 },
+	[0xa1] = { m6502_gen_load,	&cpu_a,	NULL,	m6502_ind_x,	2 },
+	[0xb1] = { m6502_gen_load,	&cpu_a,	NULL,	m6502_ind_y,	2 },
+	/* LDX */
+	[0xa2] = { m6502_gen_load_imm,	&cpu_x,	NULL,	NULL,		2 },
+	[0xa6] = { m6502_gen_load,	&cpu_x,	NULL,	m6502_zero,	2 },
+	[0xb6] = { m6502_gen_load,	&cpu_x,	NULL,	m6502_zero_y,	2 },
+	[0xae] = { m6502_gen_load,	&cpu_x,	NULL,	m6502_abs,	3 },
+	[0xbe] = { m6502_gen_load,	&cpu_x,	NULL,	m6502_abs_y,	3 },
+	/* LDY */
+	[0xa0] = { m6502_gen_load_imm,	&cpu_y,	NULL,	NULL,		2 },
+	[0xa4] = { m6502_gen_load,	&cpu_y,	NULL,	m6502_zero,	2 },
+	[0xb4] = { m6502_gen_load,	&cpu_y,	NULL,	m6502_zero_x,	2 },
+	[0xac] = { m6502_gen_load,	&cpu_y,	NULL,	m6502_abs,	3 },
+	[0xbc] = { m6502_gen_load,	&cpu_y,	NULL,	m6502_abs_x,	3 },
+	/* STA */
+	[0x85] = { m6502_gen_store,	NULL,	&cpu_a,	m6502_zero,	2 },
+	[0x95] = { m6502_gen_store,	NULL,	&cpu_a,	m6502_zero_x,	2 },
+	[0x8d] = { m6502_gen_store,	NULL,	&cpu_a,	m6502_abs,	3 },
+	[0x9d] = { m6502_gen_store,	NULL,	&cpu_a,	m6502_abs_x,	3 },
+	[0x99] = { m6502_gen_store,	NULL,	&cpu_a,	m6502_abs_y,	3 },
+	[0x81] = { m6502_gen_store,	NULL,	&cpu_a,	m6502_ind_x,	2 },
+	[0x91] = { m6502_gen_store,	NULL,	&cpu_a,	m6502_ind_y,	2 },
+	/* STX */
+	[0x86] = { m6502_gen_store,	NULL,	&cpu_x,	m6502_zero,	2 },
+	[0x96] = { m6502_gen_store,	NULL,	&cpu_x,	m6502_zero_y,	2 },
+	[0x8e] = { m6502_gen_store,	NULL,	&cpu_x,	m6502_abs,	3 },
+	/* STY */
+	[0x84] = { m6502_gen_store,	NULL,	&cpu_y,	m6502_zero,	2 },
+	[0x94] = { m6502_gen_store,	NULL,	&cpu_y,	m6502_zero_x,	2 },
+	[0x8c] = { m6502_gen_store,	NULL,	&cpu_y,	m6502_abs,	3 },
+	/* TAX */
+	[0xaa] = { m6502_gen_transfer,	&cpu_x,	&cpu_a,	NULL,		1 },
+	/* TAY */
+	[0xa8] = { m6502_gen_transfer,	&cpu_y,	&cpu_a,	NULL,		1 },
+	/* TSX */
+	[0xba] = { m6502_gen_transfer,	&cpu_x,	&cpu_s,	NULL,		1 },
+	/* TXA */
+	[0x88] = { m6502_gen_transfer,	&cpu_a,	&cpu_x,	NULL,		1 },
+	/* TXS */
+	[0x9a] = { m6502_gen_transfer,	&cpu_s,	&cpu_x,	NULL,		1 },
+	/* TYA */
+	[0x98] = { m6502_gen_transfer,	&cpu_a,	&cpu_y,	NULL,		1 },
 };
 
 static size_t m6502_gen_instruction ( DisasContext *dc ) {
@@ -105,28 +213,26 @@ static size_t m6502_gen_instruction ( DisasContext *dc ) {
 	dc->opcode = cpu_ldub_code ( dc->env, dc->pc );
 	insn = &m6502_instructions[dc->opcode];
 	if ( ! insn->gen ) {
-
-		//
-		return 0;
-
 		cpu_abort ( dc->env, "Unknown opcode %02x at %04x\n",
 			    dc->opcode, dc->pc );
 		return 0;
 	}
 
-	/* Identify register, if applicable */
-	if ( insn->reg )
-		dc->reg = *(insn->reg);
+	/* Identify registers, if applicable */
+	if ( insn->src )
+		dc->src = *(insn->src);
+	if ( insn->dest )
+		dc->dest = *(insn->dest);
 
-	/* Generate address, if applicable */
-	if ( insn->gen_address )
-		insn->gen_address ( dc );
+	/* Generate memory address, if applicable */
+	if ( insn->mem )
+		insn->mem ( dc );
 
 	/* Generate instruction */
 	insn->gen ( dc );
 
 	/* Free address, if one was generated */
-	if ( insn->gen_address )
+	if ( insn->mem )
 		tcg_temp_free_i32 ( dc->address );
 
 	return insn->len;
