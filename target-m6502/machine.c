@@ -25,12 +25,12 @@ static const VMStateDescription vmstate_cpu = {
 	.minimum_version_id = 1,
 	.minimum_version_id_old = 1,
 	.fields = ( VMStateField[] ) {
-		VMSTATE_UINT8 ( a, CPUM6502State ),
-		VMSTATE_UINT8 ( x, CPUM6502State ),
-		VMSTATE_UINT8 ( y, CPUM6502State ),
-		VMSTATE_UINT8 ( p, CPUM6502State ),
-		VMSTATE_UINT8 ( s, CPUM6502State ),
-		VMSTATE_UINT16 ( pc, CPUM6502State ),
+		VMSTATE_UINT32 ( a, CPUM6502State ),
+		VMSTATE_UINT32 ( x, CPUM6502State ),
+		VMSTATE_UINT32 ( y, CPUM6502State ),
+		VMSTATE_UINT32 ( p, CPUM6502State ),
+		VMSTATE_UINT32 ( s, CPUM6502State ),
+		VMSTATE_UINT32 ( pc, CPUM6502State ),
 		VMSTATE_END_OF_LIST()
 	},
 };

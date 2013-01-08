@@ -62,20 +62,24 @@ enum {
 	M6502_CMOS = 0x0001,
 };
 
-/** CPU state */
+/** CPU state
+ *
+ * TCG can operate only on 32-bit and 64-bit quantities.  We therefore
+ * use 32-bit fields for the 8-bit and 16-bit registers.
+ */
 typedef struct CPUM6502State {
 	/** Accumulator (A) */
-	uint8_t a;
+	uint32_t a;
 	/** X index register (X) */
-	uint8_t x;
+	uint32_t x;
 	/** Y index register (Y) */
-	uint8_t y;
+	uint32_t y;
 	/** Processor status register (P) */
-	uint8_t p;
+	uint32_t p;
 	/** Stack pointer (S) */
-	uint8_t s;
+	uint32_t s;
 	/** Program counter */
-	uint16_t pc;
+	uint32_t pc;
 
 	/** Features */
 	unsigned int features;
@@ -174,5 +178,7 @@ static inline void m6502_pc_from_tb ( CPUM6502State *env,
 	env->pc = tb->pc;
 }
 #define cpu_pc_from_tb m6502_pc_from_tb
+
+#define M6502_RESET_VECTOR 0xfffc
 
 #endif

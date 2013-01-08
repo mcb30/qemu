@@ -40,7 +40,7 @@ static void m6502_reset ( CPUState *s ) {
 	tlb_flush ( env, 1 );
 
 	/* Load initial program counter from reset vector */
-	reset = rom_ptr ( 0xfffc );
+	reset = rom_ptr ( M6502_RESET_VECTOR );
 	if ( ! reset ) {
 		fprintf ( stderr, "No ROM present to provide reset vector\n" );
 		exit ( 1 );
