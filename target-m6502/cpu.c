@@ -19,11 +19,13 @@
 
 #include "cpu.h"
 #include "qemu-common.h"
+#include "hw/loader.h"
 
 static void m6502_reset ( CPUState *s ) {
 	M6502CPU *cpu = M6502_CPU ( s );
 	M6502CPUClass *mcc = M6502_CPU_GET_CLASS ( cpu );
 	CPUM6502State *env = &cpu->env;
+	uint16_t *reset;
 
 	/* Call parent reset() method */
 	mcc->parent_reset ( s );
@@ -32,9 +34,18 @@ static void m6502_reset ( CPUState *s ) {
 	env->a = 0;
 	env->x = 0;
 	env->y = 0;
-	env->p = 0;
+	env->p = P_I;
 	env->s = 0;
 	env->pc = 0;
+	tlb_flush ( env, 1 );
+
+	/* Load initial program counter from reset vector */
+	reset = rom_ptr ( 0xfffc );
+	if ( ! reset ) {
+		fprintf ( stderr, "No ROM present to provide reset vector\n" );
+		exit ( 1 );
+	}
+	env->pc = *reset;
 }
 
 static void m6502_instance_init ( Object *obj ) {

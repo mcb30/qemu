@@ -20,6 +20,11 @@
 #ifndef HW_BBC_H
 #define HW_BBC_H
 
-#define BBC_RAM_SIZE_B ( 32 * 1024 )
+#define BBC_B_RAM_BASE 0x0000
+#define BBC_B_RAM_SIZE 0x8000
+
+#define BBC_B_MOS_NAME "bbc/OS12.ROM"
+#define BBC_B_MOS_BASE 0xc000
+#define BBC_B_MOS_SIZE 0x4000
 
 #endif

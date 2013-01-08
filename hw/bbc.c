@@ -20,7 +20,41 @@
 #include "hw.h"
 #include "boards.h"
 #include "exec/address-spaces.h"
+#include "sysemu/sysemu.h"
+#include "loader.h"
 #include "bbc.h"
+
+static void bbc_load_mos ( const char *default_bios_name, hwaddr base,
+			   int expected_size ) {
+	MemoryRegion *address_space_mem = get_system_memory();
+	MemoryRegion *mos = g_new ( MemoryRegion, 1 );
+	const char *filename;
+	int size;
+
+	/* Initialise memory region */
+	memory_region_init_ram ( mos, "bbc.mos", expected_size );
+	vmstate_register_ram_global ( mos );
+	memory_region_set_readonly ( mos, true );
+	memory_region_add_subregion ( address_space_mem, base, mos );
+
+	/* Locate MOS file */
+	if ( bios_name == NULL )
+		bios_name = default_bios_name;
+	filename = qemu_find_file ( QEMU_FILE_TYPE_BIOS, bios_name );
+	if ( ! filename ) {
+		fprintf ( stderr, "qemu: could not find MOS '%s'\n",
+			  bios_name );
+		exit ( 1 );
+	}
+
+	/* Check size */
+	size = load_image_targphys ( filename, base, expected_size );
+	if ( size != expected_size ) {
+		fprintf ( stderr, "qemu: could not load (or bad size) MOS "
+			  "'%s'\n", filename );
+		exit ( 1 );
+	}
+}
 
 static void bbcb_init ( QEMUMachineInitArgs *args ) {
 	const char *cpu_model = args->cpu_model;
@@ -28,15 +62,18 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 	MemoryRegion *address_space_mem = get_system_memory();
 	MemoryRegion *ram = g_new ( MemoryRegion, 1 );
 
+	/* Initialise RAM */
+	memory_region_init_ram ( ram, "bbc.ram", BBC_B_RAM_SIZE );
+	vmstate_register_ram_global ( ram );
+	memory_region_add_subregion ( address_space_mem, BBC_B_RAM_BASE, ram );
+
+	/* Initialise MOS ROM */
+	bbc_load_mos ( BBC_B_MOS_NAME, BBC_B_MOS_BASE, BBC_B_MOS_SIZE );
+
 	/* Initialise CPU */
 	if ( cpu_model == NULL )
 		cpu_model = "6502";
 	env = m6502_init ( cpu_model );
-
-	/* Initialise RAM */
-	memory_region_init_ram ( ram, "bbc.ram", BBC_RAM_SIZE_B );
-	vmstate_register_ram_global ( ram );
-	memory_region_add_subregion ( address_space_mem, 0, ram );
 }
 
 static QEMUMachine bbc_model_b = {
