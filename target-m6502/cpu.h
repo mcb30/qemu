@@ -167,7 +167,7 @@ static inline void m6502_get_tb_cpu_state ( CPUM6502State *env,
 #define cpu_get_tb_cpu_state m6502_get_tb_cpu_state
 
 static inline bool m6502_has_work ( CPUState *cpu ) {
-	return 1;
+	return 0;
 }
 #define cpu_has_work m6502_has_work
 

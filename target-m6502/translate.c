@@ -25,83 +25,141 @@
 #define GEN_HELPER 1
 #include "helper.h"
 
+#define MEM_INDEX 0
+
 static TCGv_ptr cpu_env;
-static TCGv cpu_a;
-static TCGv cpu_x;
-static TCGv cpu_y;
-static TCGv cpu_p;
-static TCGv cpu_s;
-static TCGv cpu_pc;
+static TCGv_i32 cpu_a;
+static TCGv_i32 cpu_x;
+static TCGv_i32 cpu_y;
+static TCGv_i32 cpu_p;
+static TCGv_i32 cpu_s;
+static TCGv_i32 cpu_pc;
+
+#include "exec/gen-icount.h"
 
 typedef struct {
-	/** Length of instruction (including opcode) */
-	size_t len;
-	/** Read */
-	unsigned int ( * read ) ( CPUM6502State *env, hwaddr pc );
-	/** Write */
-	void ( * write ) ( CPUM6502State *env, hwaddr pc, unsigned int value );
-} M6502AddressingMode;
+	CPUM6502State *env;
+	uint32_t pc;
 
-static unsigned int m6502_immediate_read ( CPUM6502State *env, hwaddr pc ) {
-	return cpu_ldub_code ( env, ( pc + 1 ) );
-}
-
-static const M6502AddressingMode m6502_immediate = {
-	.len = 2,
-	.read = m6502_immediate_read,
-};
+	uint8_t opcode;
+	TCGv_i32 reg;
+	TCGv_i32 address;
+} DisasContext;
 
 typedef struct {
 	/** Generate instruction */
-	void ( * gen ) ( CPUM6502State *env, hwaddr pc,
-			 const M6502AddressingMode *mode );
-	/** Addressing mode */
-	const M6502AddressingMode *mode;
+	void ( * gen ) ( DisasContext *dc );
+	/** Register (if any) */
+	TCGv_i32 *reg;
+	/** Addressing mode (if any) */
+	void ( * gen_address ) ( DisasContext *dc );
+	/** Length of instruction */
+	size_t len;
 } M6502Instruction;
 
-static void m6502_lda ( CPUM6502State *env, hwaddr pc,
-			const M6502AddressingMode *mode ) {
-	fprintf ( stderr, "Load accumulator with %02x\n",
-		  mode->read ( env, pc ) );
+static void m6502_absolute ( DisasContext *dc ) {
 
-	tcg_gen_movi_i32 ( cpu_a, mode->read ( env, pc ) );
+	dc->address = tcg_const_i32 ( cpu_lduw_code ( dc->env,
+						      ( dc->pc + 1 ) ) );
 }
 
+static void m6502_gen_load_immediate ( DisasContext *dc ) {
+	uint8_t value;
+
+	value = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
+	tcg_gen_movi_i32 ( dc->reg, value );
+}
+
+static void m6502_gen_store ( DisasContext *dc ) {
+	
+	tcg_gen_qemu_st8 ( dc->reg, dc->address, MEM_INDEX );
+}
+
+#if 0
+static void m6502_gen_inc_zeropage_x ( CPUM6502State *env, hwaddr pc ) {
+	TCGv_i32 address = tcg_temp_new_i32();
+	TCGv_i32 value = tcg_temp_new_i32();
+
+	/* Calculate address within zero page */
+	tcg_gen_addi_i32 ( address, cpu_x, cpu_ldub_code ( env, ( pc + 1 ) ) );
+	tcg_gen_andi_i32 ( address, address, 0xff );
+
+	tcg_gen_qemu_ld8u ( value, address, MEM_INDEX );
+	tcg_gen_addi_i32 ( value, value, 1 );
+	tcg_gen_qemu_st8 ( value, address, MEM_INDEX );
+
+	tcg_temp_free_i32 ( value );
+	tcg_temp_free_i32 ( address );
+}
+#endif
+
 static const M6502Instruction m6502_instructions[256] = {
-	[0xa9] = { m6502_lda, &m6502_immediate },
+	[0x8d] = { m6502_gen_store, &cpu_a, m6502_absolute, 3 },
+	[0xa9] = { m6502_gen_load_immediate, &cpu_a, NULL, 2 },
 };
 
-static size_t m6502_gen_instruction ( CPUM6502State *env, hwaddr pc ) {
-	uint8_t opcode;
+static size_t m6502_gen_instruction ( DisasContext *dc ) {
 	const M6502Instruction *insn;
 
-	/* Decode opcode */
-	opcode = cpu_ldub_code ( env, pc );
-	insn = &m6502_instructions[opcode];
-	if ( ! insn ) {
-		cpu_abort ( env, "Unknown opcode %02x\n", opcode );
+	/* Fetch and validate opcode */
+	dc->opcode = cpu_ldub_code ( dc->env, dc->pc );
+	insn = &m6502_instructions[dc->opcode];
+	if ( ! insn->gen ) {
+
+		//
+		return 0;
+
+		cpu_abort ( dc->env, "Unknown opcode %02x at %04x\n",
+			    dc->opcode, dc->pc );
 		return 0;
 	}
 
-	/* Generate instruction */
-	insn->gen ( env, pc, insn->mode );
+	/* Identify register, if applicable */
+	if ( insn->reg )
+		dc->reg = *(insn->reg);
 
-	return insn->mode->len;
+	/* Generate address, if applicable */
+	if ( insn->gen_address )
+		insn->gen_address ( dc );
+
+	/* Generate instruction */
+	insn->gen ( dc );
+
+	/* Free address, if one was generated */
+	if ( insn->gen_address )
+		tcg_temp_free_i32 ( dc->address );
+
+	return insn->len;
 }
 
 void m6502_gen_intermediate_code ( CPUM6502State *env,
 				   struct TranslationBlock *tb ) {
-	uint8_t foo;
+	DisasContext ctx;
+	DisasContext *dc = &ctx;
+	hwaddr pc_start = tb->pc;
+	unsigned int num_insns = 0;
+	size_t len;
 
-	printf ( "gen_intermediate_code()\n" );
+	printf ( "gen_intermediate_code() pc=%04x\n", tb->pc );
 
-	foo = cpu_ldub_code ( env, tb->pc );
-	printf ( "Byte at %04x = %02x\n", tb->pc, foo );
+	dc->env = env;
+	dc->pc = pc_start;
 
-	m6502_gen_instruction ( env, tb->pc );
+	gen_icount_start();
+	do {
+		len = m6502_gen_instruction ( dc );
+		dc->pc += len;
+		num_insns++;
+	} while ( len );
 
+	tcg_gen_movi_i32 ( cpu_pc, dc->pc );
+	gen_helper_hlt ( cpu_env );
 	tcg_gen_exit_tb ( 0 );
 
+	gen_icount_end ( tb, num_insns );
+	*tcg_ctx.gen_opc_ptr = INDEX_op_end;
+	tb->size = ( dc->pc - pc_start );
+	tb->icount = num_insns;
 }
 
 void m6502_gen_intermediate_code_pc ( CPUM6502State *env,

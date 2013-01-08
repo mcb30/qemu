@@ -143,15 +143,3 @@ void m6502_interrupt ( CPUM6502State *env ) {
 hwaddr m6502_get_phys_page_debug ( CPUM6502State *env, target_ulong addr ) {
     return addr & TARGET_PAGE_MASK;
 }
-
-#if !defined(CONFIG_USER_ONLY)
-#define MMUSUFFIX _mmu
-#define SHIFT 0
-#include "exec/softmmu_template.h"
-#define SHIFT 1
-#include "exec/softmmu_template.h"
-#define SHIFT 2
-#include "exec/softmmu_template.h"
-#define SHIFT 3
-#include "exec/softmmu_template.h"
-#endif
