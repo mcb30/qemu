@@ -27,4 +27,13 @@
 #define BBC_B_MOS_BASE 0xc000
 #define BBC_B_MOS_SIZE 0x4000
 
+#define BBC_FRED_BASE 0xfc00
+#define BBC_FRED_SIZE 0x0100
+
+#define BBC_JIM_BASE 0xfd00
+#define BBC_JIM_SIZE 0x0100
+
+#define BBC_SHEILA_BASE 0xfe00
+#define BBC_SHEILA_SIZE 0x0100
+
 #endif

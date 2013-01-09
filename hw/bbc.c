@@ -24,6 +24,13 @@
 #include "loader.h"
 #include "bbc.h"
 
+/**
+ * Load MOS ROM
+ *
+ * @v default_bios_name	Default MOS name to use if none specified
+ * @v base		Base address
+ * @v expected_size	Expected size of MOS ROM
+ */
 static void bbc_load_mos ( const char *default_bios_name, hwaddr base,
 			   int expected_size ) {
 	MemoryRegion *address_space_mem = get_system_memory();
@@ -56,6 +63,95 @@ static void bbc_load_mos ( const char *default_bios_name, hwaddr base,
 	}
 }
 
+/**
+ * Dummy read from unimplemented I/O region
+ *
+ * @v opaque		Region name
+ * @v addr		Address within region
+ * @v size		Size of read
+ * @ret data		Read data
+ */
+static uint64_t bbc_dummy_read ( void *opaque, hwaddr addr,
+				 unsigned int size ) {
+	char *name = opaque;
+
+	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from &%02lX\n",
+			name, addr );
+	return 0;
+}
+
+/**
+ * Dummy write to unimplemented I/O region
+ *
+ * @v opaque		Region name
+ * @v addr		Address within region
+ * @v data		Data to write
+ * @v size		Size of write
+ */
+static void bbc_dummy_write ( void *opaque, hwaddr addr, uint64_t data,
+			      unsigned int size ) {
+	char *name = opaque;
+
+	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write to &%02lX\n",
+			name, addr );
+}
+
+/** Dummy I/O operations */
+static const MemoryRegionOps bbc_dummy_ops = {
+	.read = bbc_dummy_read,
+	.write = bbc_dummy_write,
+};
+
+/**
+ * Initialise FRED
+ *
+ */
+static void bbc_init_fred ( void ) {
+	MemoryRegion *address_space_mem = get_system_memory();
+	MemoryRegion *fred = g_new ( MemoryRegion, 1 );
+	static char name[] = "FRED";
+
+	memory_region_init_io ( fred, &bbc_dummy_ops, name, "fred",
+				BBC_FRED_SIZE );
+	memory_region_add_subregion_overlap ( address_space_mem, BBC_FRED_BASE,
+					      fred, 1 );
+}
+
+/**
+ * Initialise JIM
+ *
+ */
+static void bbc_init_jim ( void ) {
+	MemoryRegion *address_space_mem = get_system_memory();
+	MemoryRegion *jim = g_new ( MemoryRegion, 1 );
+	static char name[] = "JIM";
+
+	memory_region_init_io ( jim, &bbc_dummy_ops, name, "jim",
+				BBC_JIM_SIZE );
+	memory_region_add_subregion_overlap ( address_space_mem, BBC_JIM_BASE,
+					      jim, 1 );
+}
+
+/**
+ * Initialise SHEILA
+ *
+ */
+static void bbc_init_sheila ( void ) {
+	MemoryRegion *address_space_mem = get_system_memory();
+	MemoryRegion *sheila = g_new ( MemoryRegion, 1 );
+	static char name[] = "SHEILA";
+
+	memory_region_init_io ( sheila, &bbc_dummy_ops, name, "sheila",
+				BBC_SHEILA_SIZE );
+	memory_region_add_subregion_overlap ( address_space_mem,
+					      BBC_SHEILA_BASE, sheila, 1 );
+}
+
+/**
+ * Initialise BBC Model B
+ *
+ * @v args		Machine arguments
+ */
 static void bbcb_init ( QEMUMachineInitArgs *args ) {
 	const char *cpu_model = args->cpu_model;
 	CPUM6502State *env;
@@ -70,12 +166,18 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 	/* Initialise MOS ROM */
 	bbc_load_mos ( BBC_B_MOS_NAME, BBC_B_MOS_BASE, BBC_B_MOS_SIZE );
 
+	/* Initialise FRED, JIM, and SHEILA */
+	bbc_init_fred();
+	bbc_init_jim();
+	bbc_init_sheila();
+
 	/* Initialise CPU */
 	if ( cpu_model == NULL )
 		cpu_model = "6502";
 	env = m6502_init ( cpu_model );
 }
 
+/** BBC Model B */
 static QEMUMachine bbc_model_b = {
 	.name = "bbcb",
 	.desc = "Acorn BBC Micro Model B",
@@ -83,6 +185,9 @@ static QEMUMachine bbc_model_b = {
 	.is_default = 1,
 };
 
+/**
+ * Register BBC machines
+ */
 static void bbc_machine_init ( void ) {
 	qemu_register_machine ( &bbc_model_b );
 }
