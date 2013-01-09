@@ -740,6 +740,28 @@ static void m6502_gen_comp ( DisasContext *dc ) {
 		  ( ( src == &cpu_a ) ? "P" : src->name ), dc->address_desc );
 }
 
+/**
+ * Generate bit test instruction (BIT)
+ *
+ * @v dc		Disassembly context
+ */
+static void m6502_gen_bit ( DisasContext *dc ) {
+	M6502Register *src = dc->insn->src;
+	TCGv_i32 value;
+
+	/* Generate bit test */
+	value = tcg_temp_new_i32();
+	tcg_gen_qemu_ld8u ( value, dc->address, MEM_INDEX );
+	tcg_gen_andi_i32 ( cpu_p_v.var, value, 0x40 );
+	tcg_gen_andi_i32 ( cpu_p_n.var, value, 0x80 );
+	tcg_gen_and_i32 ( value, value, src->var );
+	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, value, 0 );
+	tcg_temp_free_i32 ( value );
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : BIT %s\n", dc->pc, dc->address_desc );
+}
+
 /******************************************************************************
  *
  * Branch/jump instructions
@@ -945,6 +967,9 @@ static const M6502Instruction m6502_instructions[256] = {
 	[0xb0] = { m6502_gen_br_set,	NULL, &cpu_p_c,	NULL,		2 },
 	/* BEQ */
 	[0xf0] = { m6502_gen_br_set,	NULL, &cpu_p_z,	NULL,		2 },
+	/* BIT */
+	[0x24] = { m6502_gen_bit,	NULL,	&cpu_a,	m6502_zero,	2 },
+	[0x2c] = { m6502_gen_bit,	NULL,	&cpu_a,	m6502_abs,	3 },
 	/* BMI */
 	[0x30] = { m6502_gen_br_set,	NULL, &cpu_p_n,	NULL,		2 },
 	/* BNE */
