@@ -121,12 +121,12 @@ void m6502_dump_state ( CPUM6502State *env, FILE *f, fprintf_function fprintf,
 
 	/* Assemble status register value */
 	for ( i = 0 ; i < 8 ; i++ )
-		p |= ( env->p[i] << i );
+		p |= ( ( !! env->p[i] ) << i );
 
 	/* Dump state */
-	fprintf ( f, "PC=%04x A=%02x X=%02x Y=%02x S=01%02x "
+	fprintf ( f, "PC=%04x A=%02x X=%02x Y=%02x S=%04x "
 		  "P=%02x(%c%c%c%c%c%c%c%c)\n", env->pc, env->a, env->x,
-		  env->y, env->s, p,
+		  env->y, ( M6502_STACK_BASE + env->s ), p,
 		  ( env->p[P_N] ? 'N' : 'n' ),
 		  ( env->p[P_V] ? 'V' : 'v' ),
 		  ( env->p[P_U] ? 'U' : 'u' ),

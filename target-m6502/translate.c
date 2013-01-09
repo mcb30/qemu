@@ -33,22 +33,23 @@ typedef struct {
 	/** TCG variable */
 	TCGv_i32 var;
 	/** Name (as used in disassembly) */
-	char name;
+	char name[2];
 } M6502Register;
 
 static TCGv_ptr cpu_env;
-static M6502Register cpu_a = { .name = 'A' };
-static M6502Register cpu_x = { .name = 'X' };
-static M6502Register cpu_y = { .name = 'Y' };
-static M6502Register cpu_p_c = { .name = 'C' };
-static M6502Register cpu_p_z = { .name = 'Z' };
-static M6502Register cpu_p_i = { .name = 'I' };
-static M6502Register cpu_p_d = { .name = 'D' };
-static M6502Register cpu_p_b = { .name = 'B' };
-static M6502Register cpu_p_u = { .name = 'U' };
-static M6502Register cpu_p_v = { .name = 'V' };
-static M6502Register cpu_p_n = { .name = 'N' };
-static M6502Register cpu_s = { .name = 'S' };
+static M6502Register cpu_a = { .name = "A" };
+static M6502Register cpu_x = { .name = "X" };
+static M6502Register cpu_y = { .name = "Y" };
+static M6502Register cpu_p = { .name = "P" }; /* Dummy register for PHP, PLP */
+static M6502Register cpu_p_c = { .name = "C" };
+static M6502Register cpu_p_z = { .name = "Z" };
+static M6502Register cpu_p_i = { .name = "I" };
+static M6502Register cpu_p_d = { .name = "D" };
+static M6502Register cpu_p_b = { .name = "B" };
+static M6502Register cpu_p_u = { .name = "U" };
+static M6502Register cpu_p_v = { .name = "V" };
+static M6502Register cpu_p_n = { .name = "N" };
+static M6502Register cpu_s = { .name = "S" };
 static TCGv_i32 cpu_pc;
 
 #include "exec/gen-icount.h"
@@ -78,6 +79,7 @@ struct DisasContext {
 	char address_desc[16];
 };
 
+/* Generate address description */
 static void m6502_address_desc ( DisasContext *dc, const char *fmt, ... ) {
 	va_list args;
 
@@ -93,8 +95,10 @@ static void m6502_address_desc ( DisasContext *dc, const char *fmt, ... ) {
 static void m6502_abs ( DisasContext *dc ) {
 	uint16_t base = cpu_lduw_code ( dc->env, ( dc->pc + 1 ) );
 
+	/* Generate address */
 	dc->address = tcg_const_i32 ( base );
 
+	/* Generate address description for disassembly */
 	m6502_address_desc ( dc, "&%04X", base );
 }
 
@@ -102,10 +106,12 @@ static void m6502_abs ( DisasContext *dc ) {
 static void m6502_abs_x ( DisasContext *dc ) {
 	uint16_t base = cpu_lduw_code ( dc->env, ( dc->pc + 1 ) );
 
+	/* Generate address */
 	dc->address = tcg_temp_new_i32();
 	tcg_gen_addi_i32 ( dc->address, cpu_x.var, base );
 	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ADDRESS_MASK );
 
+	/* Generate address description for disassembly */
 	m6502_address_desc ( dc, "&%04X,X", base );
 }
 
@@ -113,10 +119,12 @@ static void m6502_abs_x ( DisasContext *dc ) {
 static void m6502_abs_y ( DisasContext *dc ) {
 	uint16_t base = cpu_lduw_code ( dc->env, ( dc->pc + 1 ) );
 
+	/* Generate address */
 	dc->address = tcg_temp_new_i32();
 	tcg_gen_addi_i32 ( dc->address, cpu_y.var, base );
 	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ADDRESS_MASK );
 
+	/* Generate address description for disassembly */
 	m6502_address_desc ( dc, "&%04X,Y", base );
 }
 
@@ -124,8 +132,10 @@ static void m6502_abs_y ( DisasContext *dc ) {
 static void m6502_zero ( DisasContext *dc ) {
 	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
 
+	/* Generate address */
 	dc->address = tcg_const_i32 ( base );
 
+	/* Generate address description for disassembly */
 	m6502_address_desc ( dc, "&%02X", base );
 }
 
@@ -133,10 +143,12 @@ static void m6502_zero ( DisasContext *dc ) {
 static void m6502_zero_x ( DisasContext *dc ) {
 	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
 
+	/* Generate address */
 	dc->address = tcg_temp_new_i32();
 	tcg_gen_addi_i32 ( dc->address, cpu_x.var, base );
 	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ZERO_PAGE_MASK );
 
+	/* Generate address description for disassembly */
 	m6502_address_desc ( dc, "&%02X,X", base );
 }
 
@@ -144,10 +156,12 @@ static void m6502_zero_x ( DisasContext *dc ) {
 static void m6502_zero_y ( DisasContext *dc ) {
 	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
 
+	/* Generate address */
 	dc->address = tcg_temp_new_i32();
 	tcg_gen_addi_i32 ( dc->address, cpu_y.var, base );
 	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ZERO_PAGE_MASK );
 
+	/* Generate address description for disassembly */
 	m6502_address_desc ( dc, "&%02X,Y", base );
 }
 
@@ -155,11 +169,13 @@ static void m6502_zero_y ( DisasContext *dc ) {
 static void m6502_ind_x ( DisasContext *dc ) {
 	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
 
+	/* Generate address */
 	dc->address = tcg_temp_new_i32();
 	tcg_gen_addi_i32 ( dc->address, cpu_x.var, base );
 	tcg_gen_andi_i32 ( dc->address, dc->address, M6502_ZERO_PAGE_MASK );
 	tcg_gen_qemu_ld16u ( dc->address, dc->address, MEM_INDEX );
 
+	/* Generate address description for disassembly */
 	m6502_address_desc ( dc, "(&%02X,X)", base );
 }
 
@@ -167,10 +183,12 @@ static void m6502_ind_x ( DisasContext *dc ) {
 static void m6502_ind_y ( DisasContext *dc ) {
 	uint8_t base = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
 
+	/* Generate address */
 	dc->address = tcg_const_i32 ( base );
 	tcg_gen_qemu_ld16u ( dc->address, dc->address, MEM_INDEX );
 	tcg_gen_add_i32 ( dc->address, dc->address, cpu_y.var );
 
+	/* Generate address description for disassembly */
 	m6502_address_desc ( dc, "(&%02X),Y", base );
 }
 
@@ -182,13 +200,11 @@ static void m6502_gen_load_imm ( DisasContext *dc ) {
 	/* Load register */
 	value = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
 	tcg_gen_movi_i32 ( dest->var, value );
-
-	/* Update flags */
 	tcg_gen_movi_i32 ( cpu_p_z.var, ( ( value == 0 ) ? 1 : 0 ) );
 	tcg_gen_movi_i32 ( cpu_p_n.var, ( ( value & 0x80 ) ? 1 : 0 ) );
 
 	/* Generate disassembly */
-	LOG_DIS ( "&%04X : LD%c #&%02X\n", dc->pc, dest->name, value );
+	LOG_DIS ( "&%04X : LD%s #&%02X\n", dc->pc, dest->name, value );
 }
 
 /* LDA, LDX, LDY (memory) */
@@ -197,13 +213,11 @@ static void m6502_gen_load ( DisasContext *dc ) {
 
 	/* Load register */
 	tcg_gen_qemu_ld8u ( dest->var, dc->address, MEM_INDEX );
-
-	/* Update flags */
 	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, dest->var, 0 );
-	tcg_gen_setcondi_i32 ( TCG_COND_GE, cpu_p_n.var, dest->var, 0x80 );
+	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );
 
 	/* Generate disassembly */
-	LOG_DIS ( "&%04X : LD%c %s\n", dc->pc, dest->name, dc->address_desc );
+	LOG_DIS ( "&%04X : LD%s %s\n", dc->pc, dest->name, dc->address_desc );
 }
 
 /* STA, STX, STY */
@@ -213,10 +227,8 @@ static void m6502_gen_store ( DisasContext *dc ) {
 	/* Store register */
 	tcg_gen_qemu_st8 ( src->var, dc->address, MEM_INDEX );
 
-	/* Flags are not affected */
-
 	/* Generate disassembly */
-	LOG_DIS ( "&%04X : ST%c %s\n", dc->pc, src->name, dc->address_desc );
+	LOG_DIS ( "&%04X : ST%s %s\n", dc->pc, src->name, dc->address_desc );
 }
 
 /* TAX, TAY, TSX, TXA, TXS, TYA */
@@ -226,28 +238,111 @@ static void m6502_gen_transfer ( DisasContext *dc ) {
 
 	/* Transfer register */
 	tcg_gen_mov_i32 ( dest->var, src->var );
-
-	/* Update flags */
 	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, dest->var, 0 );
-	tcg_gen_setcondi_i32 ( TCG_COND_GE, cpu_p_n.var, dest->var, 0x80 );
+	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );
 
 	/* Generate disassembly */
-	LOG_DIS ( "&%04X : T%c%c\n", dc->pc, src->name, dest->name );
+	LOG_DIS ( "&%04X : T%s%s\n", dc->pc, src->name, dest->name );
+}
+
+/* CLC, CLD, CLI, CLV */
+static void m6502_gen_clear ( DisasContext *dc ) {
+	M6502Register *dest = dc->insn->dest;
+
+	/* Set flag */
+	tcg_gen_movi_i32 ( dest->var, 0 );
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : CL%s\n", dc->pc, dest->name );
 }
 
 /* SEC, SED, SEI */
-static void m6502_set_flag ( DisasContext *dc ) {
+static void m6502_gen_set ( DisasContext *dc ) {
 	M6502Register *dest = dc->insn->dest;
 
 	/* Set flag */
 	tcg_gen_movi_i32 ( dest->var, 1 );
 
 	/* Generate disassembly */
-	LOG_DIS ( "&%04X : SE%c\n", dc->pc, dest->name );
+	LOG_DIS ( "&%04X : SE%s\n", dc->pc, dest->name );
+}
+
+/* ASL */
+static void m6502_gen_asl ( DisasContext *dc ) {
+	M6502Register *dest = dc->insn->dest;
+	TCGv_i32 value;
+
+	/* Load value from memory if applicable */
+	if ( dc->insn->mem ) {
+		value = tcg_temp_new_i32();
+		tcg_gen_qemu_ld8u ( value, dc->address, MEM_INDEX );
+	} else {
+		value = dest->var;
+	}
+
+	/* Perform shift */
+	tcg_gen_andi_i32 ( cpu_p_c.var, value, 0x80 );
+	tcg_gen_shli_i32 ( value, value, 1 );
+	tcg_gen_andi_i32 ( value, value, 0xff );
+	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, dest->var, 0 );
+	tcg_gen_andi_i32 ( cpu_p_n.var, value, 0x80 );
+
+	/* Store value back to memory if applicable */
+	if ( dc->insn->mem ) {
+		tcg_gen_qemu_st8 ( value, dc->address, MEM_INDEX );
+		tcg_temp_free_i32 ( value );
+	}
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : ASL %s\n", dc->pc,
+		  ( dc->insn->mem ? dc->address_desc : dest->name ) );
+}
+
+/* PHA, PHP */
+static void m6502_gen_push ( DisasContext *dc ) {
+	M6502Register *src = dc->insn->src;
+	TCGv_i32 address;
+
+	/* Synthesise P value, if applicable */
+	if ( src == &cpu_p ) {
+		cpu_p.var = tcg_temp_new_i32();
+		gen_helper_get_p ( cpu_p.var, cpu_env );
+	}
+
+	/* Store value at current stack address */
+	address = tcg_temp_new_i32();
+	tcg_gen_addi_i32 ( address, cpu_s.var, M6502_STACK_BASE );
+	tcg_gen_qemu_st8 ( src->var, address, MEM_INDEX );
+	tcg_temp_free_i32 ( address );
+
+	/* Decrement stack pointer (with wrap-around) */
+	tcg_gen_subi_i32 ( cpu_s.var, cpu_s.var, 1 );
+	tcg_gen_andi_i32 ( cpu_s.var, cpu_s.var, 0xff );
+
+	/* Free temporary P value, if applicable */
+	if ( src == &cpu_p )
+		tcg_temp_free_i32 ( cpu_p.var );
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : PH%s\n", dc->pc, src->name );
 }
 
 /** Instruction table */
 static const M6502Instruction m6502_instructions[256] = {
+	/* ASL */
+	[0x0a] = { m6502_gen_asl,	&cpu_a,	NULL,	NULL,		1 },
+	[0x06] = { m6502_gen_asl,	NULL,	NULL,	m6502_zero,	2 },
+	[0x16] = { m6502_gen_asl,	NULL,	NULL,	m6502_zero_x,	2 },
+	[0x0e] = { m6502_gen_asl,	NULL,	NULL,	m6502_abs,	3 },
+	[0x1e] = { m6502_gen_asl,	NULL,	NULL,	m6502_abs_x,	3 },
+	/* CLC */
+	[0x18] = { m6502_gen_clear,	&cpu_p_c, NULL,	NULL,		1 },
+	/* CLD */
+	[0xd8] = { m6502_gen_clear,	&cpu_p_d, NULL,	NULL,		1 },
+	/* CLI */
+	[0x58] = { m6502_gen_clear,	&cpu_p_i, NULL,	NULL,		1 },
+	/* CLV */
+	[0xb8] = { m6502_gen_clear,	&cpu_p_v, NULL,	NULL,		1 },
 	/* LDA */
 	[0xa9] = { m6502_gen_load_imm,	&cpu_a,	NULL,	NULL,		2 },
 	[0xa5] = { m6502_gen_load,	&cpu_a,	NULL,	m6502_zero,	2 },
@@ -269,12 +364,16 @@ static const M6502Instruction m6502_instructions[256] = {
 	[0xb4] = { m6502_gen_load,	&cpu_y,	NULL,	m6502_zero_x,	2 },
 	[0xac] = { m6502_gen_load,	&cpu_y,	NULL,	m6502_abs,	3 },
 	[0xbc] = { m6502_gen_load,	&cpu_y,	NULL,	m6502_abs_x,	3 },
+	/* PHA */
+	[0x48] = { m6502_gen_push,	NULL,	&cpu_a,	NULL,		1 },
+	/* PHP */
+	[0x08] = { m6502_gen_push,	NULL,	&cpu_p,	NULL,		1 },
 	/* SEC */
-	[0x38] = { m6502_set_flag,	&cpu_p_c, NULL,	NULL,		1 },
+	[0x38] = { m6502_gen_set,	&cpu_p_c, NULL,	NULL,		1 },
 	/* SED */
-	[0xf8] = { m6502_set_flag,	&cpu_p_d, NULL,	NULL,		1 },
+	[0xf8] = { m6502_gen_set,	&cpu_p_d, NULL,	NULL,		1 },
 	/* SEI */
-	[0x78] = { m6502_set_flag,	&cpu_p_i, NULL,	NULL,		1 },
+	[0x78] = { m6502_gen_set,	&cpu_p_i, NULL,	NULL,		1 },
 	/* STA */
 	[0x85] = { m6502_gen_store,	NULL,	&cpu_a,	m6502_zero,	2 },
 	[0x95] = { m6502_gen_store,	NULL,	&cpu_a,	m6502_zero_x,	2 },

@@ -38,3 +38,14 @@ void helper_hlt ( CPUM6502State *env ) {
 	env->exception_index = EXCP_HLT;
 	cpu_loop_exit ( env );
 }
+
+uint32_t helper_get_p ( CPUM6502State *env ) {
+	uint8_t p = 0;
+	unsigned int i;
+
+	/* Assemble status register value */
+	for ( i = 0 ; i < 8 ; i++ )
+		p |= ( ( !! env->p[i] ) << i );
+
+	return p;
+}

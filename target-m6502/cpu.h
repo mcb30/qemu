@@ -77,7 +77,8 @@ typedef struct CPUM6502State {
 	uint32_t y;
 	/** Status register (P)
 	 *
-	 * Stored as individual bits for TCG efficiency.
+	 * Stored as individual bits for efficiency of TCG-generated
+	 * code.  Any non-zero value counts as a set flag.
 	 */
 	uint32_t p[8];
 	/** Stack pointer (S) */
@@ -186,5 +187,6 @@ static inline void m6502_pc_from_tb ( CPUM6502State *env,
 #define M6502_RESET_VECTOR 0xfffc
 #define M6502_ADDRESS_MASK 0xffff
 #define M6502_ZERO_PAGE_MASK 0xff
+#define M6502_STACK_BASE 0x0100
 
 #endif
