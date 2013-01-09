@@ -420,7 +420,7 @@ static void m6502_gen_add_sub_imm ( DisasContext *dc, int invert ) {
 	tcg_gen_shri_i32 ( cpu_p_c.var, dest->var, 8 );
 	tcg_gen_andi_i32 ( dest->var, dest->var, 0xff );
 	tcg_gen_xori_i32 ( overflow_after, dest->var, value );
-	tcg_gen_and_i32 ( cpu_p_v.var, overflow_before, overflow_after );
+	tcg_gen_andc_i32 ( cpu_p_v.var, overflow_after, overflow_before );
 	tcg_gen_andi_i32 ( cpu_p_v.var, cpu_p_v.var, 0x80 );
 	tcg_gen_mov_i32 ( cpu_p_nz.var, dest->var );
 	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );
@@ -430,7 +430,8 @@ static void m6502_gen_add_sub_imm ( DisasContext *dc, int invert ) {
 	/* FIXME : support decimal mode */
 
 	/* Generate disassembly */
-	LOG_DIS ( "&%04X : SBC #&%02X\n", dc->pc, value );
+	LOG_DIS ( "&%04X : %sC #&%02X\n", dc->pc,
+		  ( invert ? "SB" : "AD" ), value );
 }
 
 /**
@@ -458,7 +459,7 @@ static void m6502_gen_add_sub ( DisasContext *dc, int invert ) {
 	tcg_gen_shri_i32 ( cpu_p_c.var, dest->var, 8 );
 	tcg_gen_andi_i32 ( dest->var, dest->var, 0xff );
 	tcg_gen_xor_i32 ( overflow_after, dest->var, value );
-	tcg_gen_and_i32 ( cpu_p_v.var, overflow_before, overflow_after );
+	tcg_gen_andc_i32 ( cpu_p_v.var, overflow_after, overflow_before );
 	tcg_gen_andi_i32 ( cpu_p_v.var, cpu_p_v.var, 0x80 );
 	tcg_gen_mov_i32 ( cpu_p_nz.var, dest->var );
 	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );
@@ -469,7 +470,8 @@ static void m6502_gen_add_sub ( DisasContext *dc, int invert ) {
 	/* FIXME : support decimal mode */
 
 	/* Generate disassembly */
-	LOG_DIS ( "&%04X : SBC %s\n", dc->pc, dc->address_desc );
+	LOG_DIS ( "&%04X : %sC %s\n", dc->pc,
+		  ( invert ? "SB" : "AD" ), dc->address_desc );
 }
 
 /**
@@ -1501,8 +1503,6 @@ static void m6502_gen_intermediate_code_internal ( CPUM6502State *env,
 	uint16_t *gen_opc_end;
 	unsigned int max_insns;
 	size_t len;
-
-	printf ( "gen_intermediate_code() pc=%04x\n", tb->pc );
 
 	/* Initialise disassembly context */
 	memset ( dc, 0, sizeof ( *dc ) );
