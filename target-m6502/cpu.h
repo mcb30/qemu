@@ -228,6 +228,7 @@ static inline void m6502_pc_from_tb ( CPUM6502State *env,
 #define cpu_pc_from_tb m6502_pc_from_tb
 
 #define M6502_RESET_VECTOR 0xfffc
+#define M6502_BREAK_VECTOR 0xfffe
 #define M6502_ADDRESS_MASK 0xffff
 #define M6502_ZERO_PAGE_MASK 0xff
 #define M6502_STACK_BASE 0x0100

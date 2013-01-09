@@ -1123,6 +1123,56 @@ static void m6502_gen_rts ( DisasContext *dc ) {
 	LOG_DIS ( "&%04X : RTS\n", dc->pc );
 }
 
+/**
+ * Generate break instruction (BRK)
+ *
+ * @v dc		Disassembly context
+ */
+static void m6502_gen_break ( DisasContext *dc ) {
+	TCGv_i32 stack;
+	TCGv_i32 retaddr;
+	TCGv_i32 vector;
+
+	/* Store return address and status register on stack */
+	stack = tcg_temp_new_i32();
+	retaddr = tcg_const_i32 ( dc->pc + 2 );
+	cpu_p.var = tcg_temp_new_i32();
+	tcg_gen_addi_i32 ( stack, cpu_s.var, M6502_STACK_BASE - 1 );
+	tcg_gen_qemu_st16 ( retaddr, stack, MEM_INDEX );
+	tcg_gen_addi_i32 ( stack, cpu_s.var, M6502_STACK_BASE - 2 );
+	gen_helper_get_p ( cpu_p.var, cpu_env );
+	tcg_gen_qemu_st8 ( cpu_p.var, stack, MEM_INDEX );
+	tcg_temp_free_i32 ( cpu_p.var );
+	tcg_temp_free_i32 ( retaddr );
+	tcg_temp_free_i32 ( stack );
+
+	/* Decrement stack pointer by three (with wrap-around) */
+	tcg_gen_subi_i32 ( cpu_s.var, cpu_s.var, 3 );
+	tcg_gen_andi_i32 ( cpu_s.var, cpu_s.var, 0xff );
+
+	/* Set break flag */
+	tcg_gen_movi_i32 ( cpu_p_b.var, 1 );
+
+	/* Jump to break vector */
+	vector = tcg_const_i32 ( M6502_RESET_VECTOR );
+	tcg_gen_qemu_ld16u ( cpu_pc, vector, MEM_INDEX );
+	tcg_temp_free_i32 ( vector );
+	tcg_gen_goto_tb ( 0 );
+	tcg_gen_exit_tb ( 0 );
+
+	/* Stop translation */
+	dc->is_jmp = DISAS_JUMP;
+}
+
+/**
+ * Generate no-operation instruction (NOP)
+ *
+ * @v dc		Disassembly context
+ */
+static void m6502_gen_nop ( DisasContext *dc ) {
+	/* Nothing to do */
+}
+
 /******************************************************************************
  *
  * Instruction tables
@@ -1131,6 +1181,8 @@ static void m6502_gen_rts ( DisasContext *dc ) {
 
 /** Instruction table */
 static const M6502Instruction m6502_instructions[256] = {
+	/* BRK */
+	[0x00] = { m6502_gen_break,	NULL,	NULL,	NULL,		1 },
 	/* ADC */
 	[0x69] = { m6502_gen_add_imm,	&cpu_a,	NULL,	NULL,		2 },
 	[0x65] = { m6502_gen_add,	&cpu_a,	NULL,	m6502_zero,	2 },
@@ -1258,6 +1310,8 @@ static const M6502Instruction m6502_instructions[256] = {
 	[0x56] = { m6502_gen_lsr,	NULL,	NULL,	m6502_zero_x,	2 },
 	[0x4e] = { m6502_gen_lsr,	NULL,	NULL,	m6502_abs,	3 },
 	[0x5e] = { m6502_gen_lsr,	NULL,	NULL,	m6502_abs_x,	3 },
+	/* NOP */
+	[0xea] = { m6502_gen_nop,	NULL,	NULL,	NULL,		1 },
 	/* OR */
 	[0x09] = { m6502_gen_or_imm,	&cpu_a,	NULL,	NULL,		2 },
 	[0x05] = { m6502_gen_or,	&cpu_a,	NULL,	m6502_zero,	2 },
@@ -1345,7 +1399,7 @@ static size_t m6502_gen_instruction ( DisasContext *dc ) {
 
 		//
 		LOG_DIS ( "&%04X : unknown opcode &%02X\n", dc->pc, opcode );
-		return 0;
+		//return 0;
 
 		cpu_abort ( dc->env, "Unknown opcode %02x at %04x\n",
 			    opcode, dc->pc );
