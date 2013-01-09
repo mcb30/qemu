@@ -39,6 +39,10 @@ void helper_hlt ( CPUM6502State *env ) {
 	cpu_loop_exit ( env );
 }
 
+void helper_dump_state ( CPUM6502State *env ) {
+	m6502_dump_state ( env, stderr, fprintf, 0 );
+}
+
 uint32_t helper_get_p ( CPUM6502State *env ) {
 	uint8_t p = 0;
 	unsigned int i;

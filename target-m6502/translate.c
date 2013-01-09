@@ -73,10 +73,13 @@ typedef struct {
 struct DisasContext {
 	CPUM6502State *env;
 	uint32_t pc;
+	TranslationBlock *tb;
 
 	const M6502Instruction *insn;
 	TCGv_i32 address;
 	char address_desc[16];
+
+	int is_jmp;
 };
 
 /* Generate address description */
@@ -267,8 +270,13 @@ static void m6502_gen_set ( DisasContext *dc ) {
 	LOG_DIS ( "&%04X : SE%s\n", dc->pc, dest->name );
 }
 
-/* ASL */
-static void m6502_gen_asl ( DisasContext *dc ) {
+/**
+ * Load value for read/modify/write instruction
+ *
+ * @v dc		Disassembly context
+ * @ret value		Value (must be passed to m6502_rmw_store())
+ */
+static TCGv_i32 m6502_rmw_load ( DisasContext *dc ) {
 	M6502Register *dest = dc->insn->dest;
 	TCGv_i32 value;
 
@@ -280,22 +288,82 @@ static void m6502_gen_asl ( DisasContext *dc ) {
 		value = dest->var;
 	}
 
-	/* Perform shift */
-	tcg_gen_andi_i32 ( cpu_p_c.var, value, 0x80 );
-	tcg_gen_shli_i32 ( value, value, 1 );
-	tcg_gen_andi_i32 ( value, value, 0xff );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, dest->var, 0 );
-	tcg_gen_andi_i32 ( cpu_p_n.var, value, 0x80 );
+	return value;
+}
+
+/**
+ * Store value for read/modify/write instruction
+ *
+ * @v dc		Disassembly context
+ * @v value		Value (created by m6502_rmw_load())
+ */
+static void m6502_rmw_store ( DisasContext *dc, TCGv_i32 value ) {
 
 	/* Store value back to memory if applicable */
 	if ( dc->insn->mem ) {
 		tcg_gen_qemu_st8 ( value, dc->address, MEM_INDEX );
 		tcg_temp_free_i32 ( value );
 	}
+}
+
+/* ASL */
+static void m6502_gen_asl ( DisasContext *dc ) {
+	M6502Register *dest = dc->insn->dest;
+	TCGv_i32 value;
+
+	/* Perform shift */
+	value = m6502_rmw_load ( dc );
+	tcg_gen_andi_i32 ( cpu_p_c.var, value, 0x80 );
+	tcg_gen_shli_i32 ( value, value, 1 );
+	tcg_gen_andi_i32 ( value, value, 0xff );
+	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, dest->var, 0 );
+	tcg_gen_andi_i32 ( cpu_p_n.var, value, 0x80 );
+	m6502_rmw_store ( dc, value );
 
 	/* Generate disassembly */
-	LOG_DIS ( "&%04X : ASL %s\n", dc->pc,
-		  ( dc->insn->mem ? dc->address_desc : dest->name ) );
+	LOG_DIS ( "&%04X : ASL%s%s\n", dc->pc,
+		  ( dc->insn->mem ? " " : "" ),
+		  ( dc->insn->mem ? dc->address_desc : "" ) );
+}
+
+/* INC, INX, INY */
+static void m6502_gen_inc ( DisasContext *dc ) {
+	M6502Register *dest = dc->insn->dest;
+	TCGv_i32 value;
+
+	/* Perform increment */
+	value = m6502_rmw_load ( dc );
+	tcg_gen_addi_i32 ( value, value, 1 );
+	tcg_gen_andi_i32 ( value, value, 0xff );
+	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, value, 0 );
+	tcg_gen_andi_i32 ( cpu_p_n.var, value, 0x80 );
+	m6502_rmw_store ( dc, value );
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : IN%s%s%s\n", dc->pc,
+		  ( dc->insn->mem ? "C" : dest->name ),
+		  ( dc->insn->mem ? " " : "" ),
+		  ( dc->insn->mem ? dc->address_desc : "" ) );
+}
+
+/* DEC, DEX, DEY */
+static void m6502_gen_dec ( DisasContext *dc ) {
+	M6502Register *dest = dc->insn->dest;
+	TCGv_i32 value;
+
+	/* Perform increment */
+	value = m6502_rmw_load ( dc );
+	tcg_gen_subi_i32 ( value, value, 1 );
+	tcg_gen_andi_i32 ( value, value, 0xff );
+	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, value, 0 );
+	tcg_gen_andi_i32 ( cpu_p_n.var, value, 0x80 );
+	m6502_rmw_store ( dc, value );
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : DE%s%s%s\n", dc->pc,
+		  ( dc->insn->mem ? "C" : dest->name ),
+		  ( dc->insn->mem ? " " : "" ),
+		  ( dc->insn->mem ? dc->address_desc : "" ) );
 }
 
 /* PHA, PHP */
@@ -327,6 +395,99 @@ static void m6502_gen_push ( DisasContext *dc ) {
 	LOG_DIS ( "&%04X : PH%s\n", dc->pc, src->name );
 }
 
+/* CMP, CPX, CPY (immediate) */
+static void m6502_gen_comp_imm ( DisasContext *dc ) {
+	M6502Register *src = dc->insn->src;
+	uint8_t value;
+
+	/* Generate comparison */
+	value = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
+	tcg_gen_setcondi_i32 ( TCG_COND_GE, cpu_p_c.var, src->var, value );
+	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, src->var, value );
+	tcg_gen_subi_i32 ( cpu_p_n.var, src->var, value );
+	tcg_gen_andi_i32 ( cpu_p_n.var, cpu_p_n.var, 0x80 );
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : C%s%s #%02X\n", dc->pc,
+		  ( ( src == &cpu_a ) ? "M" : "P" ),
+		  ( ( src == &cpu_a ) ? "P" : src->name ), value );
+}
+
+/* CMP, CPX, CPY */
+static void m6502_gen_comp ( DisasContext *dc ) {
+	M6502Register *src = dc->insn->src;
+	TCGv_i32 value;
+
+	/* Generate comparison */
+	value = tcg_temp_new_i32();
+	tcg_gen_qemu_ld8u ( value, dc->address, MEM_INDEX );
+	tcg_gen_setcond_i32 ( TCG_COND_GE, cpu_p_c.var, src->var, value );
+	tcg_gen_setcond_i32 ( TCG_COND_EQ, cpu_p_z.var, src->var, value );
+	tcg_gen_sub_i32 ( cpu_p_n.var, src->var, value );
+	tcg_gen_andi_i32 ( cpu_p_n.var, cpu_p_n.var, 0x80 );
+	tcg_temp_free_i32 ( value );
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : C%s%s %s\n", dc->pc,
+		  ( ( src == &cpu_a ) ? "M" : "P" ),
+		  ( ( src == &cpu_a ) ? "P" : src->name ), dc->address_desc );
+}
+
+/* BCC, BCS, BEQ, BMI, BNE, BPL, BVC, BVS */
+static void m6502_gen_branch ( DisasContext *dc, TCGCond condition ) {
+	M6502Register *src = dc->insn->src;
+	int offset = cpu_ldsb_code ( dc->env, ( dc->pc + 1 ) );
+	uint16_t target = ( dc->pc + 2 + offset );
+	static char condition_desc_buf[3];
+	static char condition_eq[] = "EQ";
+	static char condition_ne[] = "NE";
+	static char condition_pl[] = "PL";
+	static char condition_mi[] = "MI";
+	char * condition_desc;
+	int label;
+
+	/* Generate branch */
+	label = gen_new_label();
+	tcg_gen_brcondi_i32 ( condition, src->var, 0, label );
+	tcg_gen_goto_tb ( 0 );
+	tcg_gen_movi_i32 ( cpu_pc, ( dc->pc + 2 ) );
+	tcg_gen_exit_tb ( ( tcg_target_long ) dc->tb + 0 );
+	gen_set_label ( label );
+	tcg_gen_goto_tb ( 1 );
+	tcg_gen_movi_i32 ( cpu_pc, target );
+	tcg_gen_exit_tb ( ( tcg_target_long ) dc->tb + 1 );
+
+	/* Stop translation */
+	dc->is_jmp = DISAS_TB_JUMP;
+
+	/* Generate disassembly */
+	if ( qemu_loglevel_mask ( CPU_LOG_TB_IN_ASM ) ) {
+		condition_desc_buf[0] = src->name[0];
+		condition_desc_buf[1] = ( ( condition == TCG_COND_NE ) ?
+					  'S' : 'C' );
+		condition_desc = condition_desc_buf;
+		if ( src == &cpu_p_z ) {
+			condition_desc = ( ( condition == TCG_COND_NE ) ?
+					   condition_eq : condition_ne );
+		} else if ( src == &cpu_p_n ) {
+			condition_desc = ( ( condition == TCG_COND_NE ) ?
+					   condition_mi : condition_pl );
+		}
+		LOG_DIS ( "&%04X : B%s &%04X\n", dc->pc, condition_desc,
+			  target );
+	}
+}
+
+/* BCS, BEQ, BMI, BVS */
+static void m6502_gen_br_set ( DisasContext *dc ) {
+	m6502_gen_branch ( dc, TCG_COND_NE );
+}
+
+/* BCC, BNE, BPL, BVC */
+static void m6502_gen_br_clear ( DisasContext *dc ) {
+	m6502_gen_branch ( dc, TCG_COND_EQ );
+}
+
 /** Instruction table */
 static const M6502Instruction m6502_instructions[256] = {
 	/* ASL */
@@ -335,6 +496,22 @@ static const M6502Instruction m6502_instructions[256] = {
 	[0x16] = { m6502_gen_asl,	NULL,	NULL,	m6502_zero_x,	2 },
 	[0x0e] = { m6502_gen_asl,	NULL,	NULL,	m6502_abs,	3 },
 	[0x1e] = { m6502_gen_asl,	NULL,	NULL,	m6502_abs_x,	3 },
+	/* BCC */
+	[0x90] = { m6502_gen_br_clear,	NULL, &cpu_p_c,	NULL,		2 },
+	/* BCS */
+	[0xb0] = { m6502_gen_br_set,	NULL, &cpu_p_c,	NULL,		2 },
+	/* BEQ */
+	[0xf0] = { m6502_gen_br_set,	NULL, &cpu_p_z,	NULL,		2 },
+	/* BMI */
+	[0x30] = { m6502_gen_br_set,	NULL, &cpu_p_n,	NULL,		2 },
+	/* BNE */
+	[0xd0] = { m6502_gen_br_clear,	NULL, &cpu_p_z,	NULL,		2 },
+	/* BPL */
+	[0x10] = { m6502_gen_br_clear,	NULL, &cpu_p_n,	NULL,		2 },
+	/* BVC */
+	[0x50] = { m6502_gen_br_clear,	NULL, &cpu_p_v,	NULL,		2 },
+	/* BVS */
+	[0x70] = { m6502_gen_br_set,	NULL, &cpu_p_v,	NULL,		2 },
 	/* CLC */
 	[0x18] = { m6502_gen_clear,	&cpu_p_c, NULL,	NULL,		1 },
 	/* CLD */
@@ -343,6 +520,41 @@ static const M6502Instruction m6502_instructions[256] = {
 	[0x58] = { m6502_gen_clear,	&cpu_p_i, NULL,	NULL,		1 },
 	/* CLV */
 	[0xb8] = { m6502_gen_clear,	&cpu_p_v, NULL,	NULL,		1 },
+	/* CMP */
+	[0xc9] = { m6502_gen_comp_imm,	NULL,	&cpu_a,	NULL,		2 },
+	[0xc5] = { m6502_gen_comp,	NULL,	&cpu_a,	m6502_zero,	2 },
+	[0xd5] = { m6502_gen_comp,	NULL,	&cpu_a,	m6502_zero_x,	2 },
+	[0xcd] = { m6502_gen_comp,	NULL,	&cpu_a,	m6502_abs,	3 },
+	[0xdd] = { m6502_gen_comp,	NULL,	&cpu_a,	m6502_abs_x,	3 },
+	[0xd9] = { m6502_gen_comp,	NULL,	&cpu_a,	m6502_abs_y,	3 },
+	[0xc1] = { m6502_gen_comp,	NULL,	&cpu_a,	m6502_ind_x,	2 },
+	[0xd1] = { m6502_gen_comp,	NULL,	&cpu_a,	m6502_ind_y,	2 },
+	/* CPX */
+	[0xe0] = { m6502_gen_comp_imm,	NULL,	&cpu_x,	NULL,		2 },
+	[0xe4] = { m6502_gen_comp,	NULL,	&cpu_x,	m6502_zero,	2 },
+	[0xec] = { m6502_gen_comp,	NULL,	&cpu_x,	m6502_abs,	3 },
+	/* CPY */
+	[0xc0] = { m6502_gen_comp_imm,	NULL,	&cpu_y,	NULL,		2 },
+	[0xc4] = { m6502_gen_comp,	NULL,	&cpu_y,	m6502_zero,	2 },
+	[0xcc] = { m6502_gen_comp,	NULL,	&cpu_y,	m6502_abs,	3 },
+	/* DEC */
+	[0xc6] = { m6502_gen_dec,	NULL,	NULL,	m6502_zero,	2 },
+	[0xd6] = { m6502_gen_dec,	NULL,	NULL,	m6502_zero_x,	2 },
+	[0xce] = { m6502_gen_dec,	NULL,	NULL,	m6502_abs,	3 },
+	[0xde] = { m6502_gen_dec,	NULL,	NULL,	m6502_abs_x,	3 },
+	/* DEX */
+	[0xca] = { m6502_gen_dec,	&cpu_x,	NULL,	NULL,		1 },
+	/* DEY */
+	[0x88] = { m6502_gen_dec,	&cpu_y,	NULL,	NULL,		1 },
+	/* INC */
+	[0xe6] = { m6502_gen_inc,	NULL,	NULL,	m6502_zero,	2 },
+	[0xf6] = { m6502_gen_inc,	NULL,	NULL,	m6502_zero_x,	2 },
+	[0xee] = { m6502_gen_inc,	NULL,	NULL,	m6502_abs,	3 },
+	[0xfe] = { m6502_gen_inc,	NULL,	NULL,	m6502_abs_x,	3 },
+	/* INX */
+	[0xe8] = { m6502_gen_inc,	&cpu_x,	NULL,	NULL,		1 },
+	/* INY */
+	[0xc8] = { m6502_gen_inc,	&cpu_y,	NULL,	NULL,		1 },
 	/* LDA */
 	[0xa9] = { m6502_gen_load_imm,	&cpu_a,	NULL,	NULL,		2 },
 	[0xa5] = { m6502_gen_load,	&cpu_a,	NULL,	m6502_zero,	2 },
@@ -397,7 +609,7 @@ static const M6502Instruction m6502_instructions[256] = {
 	/* TSX */
 	[0xba] = { m6502_gen_transfer,	&cpu_x,	&cpu_s,	NULL,		1 },
 	/* TXA */
-	[0x88] = { m6502_gen_transfer,	&cpu_a,	&cpu_x,	NULL,		1 },
+	[0x8a] = { m6502_gen_transfer,	&cpu_a,	&cpu_x,	NULL,		1 },
 	/* TXS */
 	[0x9a] = { m6502_gen_transfer,	&cpu_s,	&cpu_x,	NULL,		1 },
 	/* TYA */
@@ -414,6 +626,7 @@ static size_t m6502_gen_instruction ( DisasContext *dc ) {
 	if ( ! insn->gen ) {
 
 		//
+		LOG_DIS ( "&%04X : unknown opcode &%02X\n", dc->pc, opcode );
 		return 0;
 
 		cpu_abort ( dc->env, "Unknown opcode %02x at %04x\n",
@@ -447,16 +660,20 @@ void m6502_gen_intermediate_code ( CPUM6502State *env,
 
 	dc->env = env;
 	dc->pc = pc_start;
+	dc->tb = tb;
+	dc->is_jmp = DISAS_NEXT;
 
 	gen_icount_start();
 	do {
 		len = m6502_gen_instruction ( dc );
 		dc->pc += len;
 		num_insns++;
-	} while ( len );
+	} while ( len && ( dc->is_jmp == DISAS_NEXT ) );
 
-	tcg_gen_movi_i32 ( cpu_pc, dc->pc );
-	gen_helper_hlt ( cpu_env );
+	if ( dc->is_jmp == DISAS_NEXT )
+		tcg_gen_movi_i32 ( cpu_pc, dc->pc );
+	if ( dc->pc == tb->pc )
+		gen_helper_hlt ( cpu_env );
 	tcg_gen_exit_tb ( 0 );
 
 	gen_icount_end ( tb, num_insns );
