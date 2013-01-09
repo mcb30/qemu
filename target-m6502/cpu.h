@@ -109,7 +109,8 @@ typedef struct CPUM6502State {
 	uint32_t p_u;
 	/** Overflow flag
 	 *
-	 * Valid values are zero and one.
+	 * Overflow flag is set iff this value is non-zero.  Defining
+	 * the flag this way allows us to eliminate some shifts.
 	 */
 	uint32_t p_v;
 	/** Negative flag

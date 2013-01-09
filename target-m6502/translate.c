@@ -101,7 +101,7 @@ unsigned int m6502_get_p ( CPUM6502State *env ) {
 	return ( ( env->p_c << P_C ) | ( ( ! env->p_nz ) << P_Z ) |
 		 ( env->p_i << P_I ) | ( env->p_d << P_D ) |
 		 ( env->p_b << P_D ) | ( env->p_u << P_U ) |
-		 ( env->p_v << P_V ) | env->p_n );
+		 ( ( !! env->p_v ) << P_V ) | env->p_n );
 }
 
 /**
@@ -117,7 +117,7 @@ void m6502_set_p ( CPUM6502State *env, unsigned int p ) {
 	env->p_i = ( ( p >> P_I ) & 1 );
 	env->p_d = ( ( p >> P_D ) & 1 );
 	env->p_u = ( ( p >> P_U ) & 1 );
-	env->p_v = ( ( p >> P_V ) & 1 );
+	env->p_v = ( p & ( 1 << P_V ) );
 	env->p_n = ( p & ( 1 << P_N ) );
 }
 
@@ -357,8 +357,6 @@ static void m6502_gen_transfer ( DisasContext *dc ) {
  *
  * Flag set/clear instructions
  *
- * These may only operate on flags for which the valid values are zero
- * and one.
  */
 
 /**
@@ -377,7 +375,7 @@ static void m6502_gen_clear ( DisasContext *dc ) {
 }
 
 /**
- * Generate set instruction (SED, SED, SEI)
+ * Generate set instruction (SEC, SED, SEI)
  *
  * @v dc		Disassembly context
  */
@@ -396,6 +394,116 @@ static void m6502_gen_set ( DisasContext *dc ) {
  * Arithmetic/logical instructions
  *
  */
+
+/**
+ * Generate add/subtract (immediate) instruction (SBC)
+ *
+ * @v dc		Disassembly context
+ * @v invert		This is a subtraction
+ */
+static void m6502_gen_add_sub_imm ( DisasContext *dc, int invert ) {
+	M6502Register *dest = dc->insn->dest;
+	uint8_t value = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
+	TCGv_i32 overflow_before;
+	TCGv_i32 overflow_after;
+
+	/* Generate add/subtract */
+	overflow_before = tcg_temp_new_i32();
+	overflow_after = tcg_temp_new_i32();
+	if ( invert )
+		value = ( value ^ 0xff );
+	tcg_gen_xori_i32 ( overflow_before, dest->var, value );
+	tcg_gen_addi_i32 ( dest->var, dest->var, value );
+	tcg_gen_add_i32 ( dest->var, dest->var, cpu_p_c.var );
+	tcg_gen_shri_i32 ( cpu_p_c.var, dest->var, 8 );
+	tcg_gen_andi_i32 ( dest->var, dest->var, 0xff );
+	tcg_gen_xori_i32 ( overflow_after, dest->var, value );
+	tcg_gen_and_i32 ( cpu_p_v.var, overflow_before, overflow_after );
+	tcg_gen_andi_i32 ( cpu_p_v.var, cpu_p_v.var, 0x80 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, dest->var );
+	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );
+	tcg_temp_free_i32 ( overflow_after );
+	tcg_temp_free_i32 ( overflow_before );
+
+	/* FIXME : support decimal mode */
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : SBC #&%02X\n", dc->pc, value );
+}
+
+/**
+ * Generate add/subtract (memory) instruction (ADC, SBC)
+ *
+ * @v dc		Disassembly context
+ * @v invert		This is a subtraction
+ */
+static void m6502_gen_add_sub ( DisasContext *dc, int invert ) {
+	M6502Register *dest = dc->insn->dest;
+	TCGv_i32 value;
+	TCGv_i32 overflow_before;
+	TCGv_i32 overflow_after;
+
+	/* Generate add/subtract */
+	value = tcg_temp_new_i32();
+	overflow_before = tcg_temp_new_i32();
+	overflow_after = tcg_temp_new_i32();
+	tcg_gen_qemu_ld8u ( value, dc->address, MEM_INDEX );
+	if ( invert )
+		tcg_gen_xori_i32 ( value, value, 0xff );
+	tcg_gen_xor_i32 ( overflow_before, dest->var, value );
+	tcg_gen_add_i32 ( dest->var, dest->var, value );
+	tcg_gen_add_i32 ( dest->var, dest->var, cpu_p_c.var );
+	tcg_gen_shri_i32 ( cpu_p_c.var, dest->var, 8 );
+	tcg_gen_andi_i32 ( dest->var, dest->var, 0xff );
+	tcg_gen_xor_i32 ( overflow_after, dest->var, value );
+	tcg_gen_and_i32 ( cpu_p_v.var, overflow_before, overflow_after );
+	tcg_gen_andi_i32 ( cpu_p_v.var, cpu_p_v.var, 0x80 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, dest->var );
+	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );
+	tcg_temp_free_i32 ( overflow_after );
+	tcg_temp_free_i32 ( overflow_before );
+	tcg_temp_free_i32 ( value );
+
+	/* FIXME : support decimal mode */
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : SBC %s\n", dc->pc, dc->address_desc );
+}
+
+/**
+ * Generate add (immediate) instruction (ADC)
+ *
+ * @v dc		Disassembly context
+ */
+static void m6502_gen_add_imm ( DisasContext *dc ) {
+	m6502_gen_add_sub_imm ( dc, 0 );
+}
+
+/**
+ * Generate add (memory) instruction (ADC)
+ *
+ * @v dc		Disassembly context
+ */
+static void m6502_gen_add ( DisasContext *dc ) {
+	m6502_gen_add_sub ( dc, 0 );
+}
+/**
+ * Generate subtract (immediate) instruction (SBC)
+ *
+ * @v dc		Disassembly context
+ */
+static void m6502_gen_sub_imm ( DisasContext *dc ) {
+	m6502_gen_add_sub_imm ( dc, 1 );
+}
+
+/**
+ * Generate subtract (memory) instruction (SBC)
+ *
+ * @v dc		Disassembly context
+ */
+static void m6502_gen_sub ( DisasContext *dc ) {
+	m6502_gen_add_sub ( dc, 1 );
+}
 
 /**
  * Generate logical AND (immediate) instruction (AND)
@@ -424,7 +532,7 @@ static void m6502_gen_and ( DisasContext *dc ) {
 	M6502Register *dest = dc->insn->dest;
 	TCGv_i32 value;
 
-	/* Generate comparison */
+	/* Generate logical AND */
 	value = tcg_temp_new_i32();
 	tcg_gen_qemu_ld8u ( value, dc->address, MEM_INDEX );
 	tcg_gen_and_i32 ( dest->var, dest->var, value );
@@ -463,7 +571,7 @@ static void m6502_gen_or ( DisasContext *dc ) {
 	M6502Register *dest = dc->insn->dest;
 	TCGv_i32 value;
 
-	/* Generate comparison */
+	/* Generate logical OR */
 	value = tcg_temp_new_i32();
 	tcg_gen_qemu_ld8u ( value, dc->address, MEM_INDEX );
 	tcg_gen_or_i32 ( dest->var, dest->var, value );
@@ -473,6 +581,45 @@ static void m6502_gen_or ( DisasContext *dc ) {
 
 	/* Generate disassembly */
 	LOG_DIS ( "&%04X : ORA %s\n", dc->pc, dc->address_desc );
+}
+
+/**
+ * Generate logical exclusive OR (immediate) instruction (EOR)
+ *
+ * @v dc		Disassembly context
+ */
+static void m6502_gen_xor_imm ( DisasContext *dc ) {
+	M6502Register *dest = dc->insn->dest;
+	uint8_t value = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
+
+	/* Generate logical XOR */
+	tcg_gen_xori_i32 ( dest->var, dest->var, value );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, dest->var );
+	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : EOR #&%02X\n", dc->pc, value );
+}
+
+/**
+ * Generate logical exclusive OR (memory) instruction (EOR)
+ *
+ * @v dc		Disassembly context
+ */
+static void m6502_gen_xor ( DisasContext *dc ) {
+	M6502Register *dest = dc->insn->dest;
+	TCGv_i32 value;
+
+	/* Generate logical XOR */
+	value = tcg_temp_new_i32();
+	tcg_gen_qemu_ld8u ( value, dc->address, MEM_INDEX );
+	tcg_gen_xor_i32 ( dest->var, dest->var, value );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, dest->var );
+	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );	
+	tcg_temp_free_i32 ( value );
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : EOR %s\n", dc->pc, dc->address_desc );
 }
 
 /******************************************************************************
@@ -527,7 +674,7 @@ static void m6502_gen_asl ( DisasContext *dc ) {
 
 	/* Perform shift left */
 	value = m6502_rmw_load ( dc );
-	tcg_gen_shri_i32 ( cpu_p_v.var, value, 7 );
+	tcg_gen_shri_i32 ( cpu_p_c.var, value, 7 );
 	tcg_gen_shli_i32 ( value, value, 1 );
 	tcg_gen_andi_i32 ( value, value, 0xff );
 	tcg_gen_mov_i32 ( cpu_p_nz.var, value );
@@ -791,8 +938,7 @@ static void m6502_gen_bit ( DisasContext *dc ) {
 	/* Generate bit test */
 	value = tcg_temp_new_i32();
 	tcg_gen_qemu_ld8u ( value, dc->address, MEM_INDEX );
-	tcg_gen_shri_i32 ( cpu_p_v.var, value, 6 );
-	tcg_gen_andi_i32 ( cpu_p_v.var, value, 0x01 );
+	tcg_gen_andi_i32 ( cpu_p_v.var, value, 0x40 );
 	tcg_gen_andi_i32 ( cpu_p_n.var, value, 0x80 );
 	tcg_gen_and_i32 ( cpu_p_nz.var, value, src->var );
 	tcg_temp_free_i32 ( value );
@@ -827,12 +973,12 @@ static void m6502_gen_branch ( DisasContext *dc, TCGCond condition ) {
 	/* Generate branch */
 	label = gen_new_label();
 	tcg_gen_brcondi_i32 ( condition, src->var, 0, label );
-	tcg_gen_goto_tb ( 0 );
 	tcg_gen_movi_i32 ( cpu_pc, ( dc->pc + 2 ) );
+	tcg_gen_goto_tb ( 0 );
 	tcg_gen_exit_tb ( ( tcg_target_long ) dc->tb + 0 );
 	gen_set_label ( label );
-	tcg_gen_goto_tb ( 1 );
 	tcg_gen_movi_i32 ( cpu_pc, target );
+	tcg_gen_goto_tb ( 1 );
 	tcg_gen_exit_tb ( ( tcg_target_long ) dc->tb + 1 );
 
 	/* Stop translation */
@@ -883,8 +1029,8 @@ static void m6502_gen_jump_abs ( DisasContext *dc ) {
 	uint16_t target = cpu_lduw_code ( dc->env, ( dc->pc + 1 ) );
 
 	/* Generate jump */
-	tcg_gen_goto_tb ( 0 );
 	tcg_gen_movi_i32 ( cpu_pc, target );
+	tcg_gen_goto_tb ( 0 );
 	tcg_gen_exit_tb ( 0 );
 
 	/* Stop translation */
@@ -902,8 +1048,8 @@ static void m6502_gen_jump_abs ( DisasContext *dc ) {
 static void m6502_gen_jump_ind ( DisasContext *dc ) {
 
 	/* Generate jump */
-	tcg_gen_goto_tb ( 0 );
 	tcg_gen_qemu_ld16u ( cpu_pc, dc->address, MEM_INDEX );
+	tcg_gen_goto_tb ( 0 );
 	tcg_gen_exit_tb ( 0 );
 
 	/* Stop translation */
@@ -936,8 +1082,8 @@ static void m6502_gen_jsr ( DisasContext *dc ) {
 	tcg_gen_andi_i32 ( cpu_s.var, cpu_s.var, 0xff );
 
 	/* Generate jump */
-	tcg_gen_goto_tb ( 0 );
 	tcg_gen_movi_i32 ( cpu_pc, target );
+	tcg_gen_goto_tb ( 0 );
 	tcg_gen_exit_tb ( 0 );
 
 	/* Stop translation */
@@ -985,6 +1131,15 @@ static void m6502_gen_rts ( DisasContext *dc ) {
 
 /** Instruction table */
 static const M6502Instruction m6502_instructions[256] = {
+	/* ADC */
+	[0x69] = { m6502_gen_add_imm,	&cpu_a,	NULL,	NULL,		2 },
+	[0x65] = { m6502_gen_add,	&cpu_a,	NULL,	m6502_zero,	2 },
+	[0x75] = { m6502_gen_add,	&cpu_a,	NULL,	m6502_zero_x,	2 },
+	[0x6d] = { m6502_gen_add,	&cpu_a,	NULL,	m6502_abs,	3 },
+	[0x7d] = { m6502_gen_add,	&cpu_a,	NULL,	m6502_abs_x,	3 },
+	[0x79] = { m6502_gen_add,	&cpu_a,	NULL,	m6502_abs_y,	3 },
+	[0x61] = { m6502_gen_add,	&cpu_a,	NULL,	m6502_ind_x,	2 },
+	[0x71] = { m6502_gen_add,	&cpu_a,	NULL,	m6502_ind_y,	2 },
 	/* AND */
 	[0x29] = { m6502_gen_and_imm,	&cpu_a,	NULL,	NULL,		2 },
 	[0x25] = { m6502_gen_and,	&cpu_a,	NULL,	m6502_zero,	2 },
@@ -1053,6 +1208,15 @@ static const M6502Instruction m6502_instructions[256] = {
 	[0xca] = { m6502_gen_dec,	&cpu_x,	NULL,	NULL,		1 },
 	/* DEY */
 	[0x88] = { m6502_gen_dec,	&cpu_y,	NULL,	NULL,		1 },
+	/* EOR */
+	[0x49] = { m6502_gen_xor_imm,	&cpu_a,	NULL,	NULL,		2 },
+	[0x45] = { m6502_gen_xor,	&cpu_a,	NULL,	m6502_zero,	2 },
+	[0x55] = { m6502_gen_xor,	&cpu_a,	NULL,	m6502_zero_x,	2 },
+	[0x4d] = { m6502_gen_xor,	&cpu_a,	NULL,	m6502_abs,	3 },
+	[0x5d] = { m6502_gen_xor,	&cpu_a,	NULL,	m6502_abs_x,	3 },
+	[0x59] = { m6502_gen_xor,	&cpu_a,	NULL,	m6502_abs_y,	3 },
+	[0x41] = { m6502_gen_xor,	&cpu_a,	NULL,	m6502_ind_x,	2 },
+	[0x51] = { m6502_gen_xor,	&cpu_a,	NULL,	m6502_ind_y,	2 },
 	/* INC */
 	[0xe6] = { m6502_gen_inc,	NULL,	NULL,	m6502_zero,	2 },
 	[0xf6] = { m6502_gen_inc,	NULL,	NULL,	m6502_zero_x,	2 },
@@ -1125,6 +1289,15 @@ static const M6502Instruction m6502_instructions[256] = {
 	[0x7e] = { m6502_gen_ror,	NULL,	NULL,	m6502_abs_x,	3 },
 	/* RTS */
 	[0x60] = { m6502_gen_rts,	NULL,	NULL,	NULL,		1 },
+	/* SBC */
+	[0xe9] = { m6502_gen_sub_imm,	&cpu_a,	NULL,	NULL,		2 },
+	[0xe5] = { m6502_gen_sub,	&cpu_a,	NULL,	m6502_zero,	2 },
+	[0xf5] = { m6502_gen_sub,	&cpu_a,	NULL,	m6502_zero_x,	2 },
+	[0xed] = { m6502_gen_sub,	&cpu_a,	NULL,	m6502_abs,	3 },
+	[0xfd] = { m6502_gen_sub,	&cpu_a,	NULL,	m6502_abs_x,	3 },
+	[0xf9] = { m6502_gen_sub,	&cpu_a,	NULL,	m6502_abs_y,	3 },
+	[0xe1] = { m6502_gen_sub,	&cpu_a,	NULL,	m6502_ind_x,	2 },
+	[0xf1] = { m6502_gen_sub,	&cpu_a,	NULL,	m6502_ind_y,	2 },
 	/* SEC */
 	[0x38] = { m6502_gen_set,	&cpu_p_c, NULL,	NULL,		1 },
 	/* SED */
