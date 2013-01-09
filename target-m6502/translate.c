@@ -42,7 +42,7 @@ static M6502Register cpu_x = { .name = "X" };
 static M6502Register cpu_y = { .name = "Y" };
 static M6502Register cpu_p = { .name = "P" }; /* Dummy register for PHP, PLP */
 static M6502Register cpu_p_c = { .name = "C" };
-static M6502Register cpu_p_z = { .name = "Z" };
+static M6502Register cpu_p_nz = { .name = "Z" };
 static M6502Register cpu_p_i = { .name = "I" };
 static M6502Register cpu_p_d = { .name = "D" };
 static M6502Register cpu_p_b = { .name = "B" };
@@ -81,6 +81,45 @@ struct DisasContext {
 
 	int is_jmp;
 };
+
+/******************************************************************************
+ *
+ * Status register assembly/disassembly
+ *
+ * See comments in CPUM6502State for an explanation of why the flags
+ * are stored this way.
+ */
+
+/**
+ * Get status register value (P)
+ *
+ * @v env		CPU state
+ * @ret p		Status register value (P)
+ */
+unsigned int m6502_get_p ( CPUM6502State *env ) {
+
+	return ( ( env->p_c << P_C ) | ( ( ! env->p_nz ) << P_Z ) |
+		 ( env->p_i << P_I ) | ( env->p_d << P_D ) |
+		 ( env->p_b << P_D ) | ( env->p_u << P_U ) |
+		 ( env->p_v << P_V ) | env->p_n );
+}
+
+/**
+ * Set status register value (P)
+ *
+ * @v env		CPU state
+ * @v p			Status register value (P)
+ */
+void m6502_set_p ( CPUM6502State *env, unsigned int p ) {
+
+	env->p_c = ( ( p >> P_C ) & 1 );
+	env->p_nz = ~( p & ( 1 << P_Z ) );
+	env->p_i = ( ( p >> P_I ) & 1 );
+	env->p_d = ( ( p >> P_D ) & 1 );
+	env->p_u = ( ( p >> P_U ) & 1 );
+	env->p_v = ( ( p >> P_V ) & 1 );
+	env->p_n = ( p & ( 1 << P_N ) );
+}
 
 /******************************************************************************
  *
@@ -257,8 +296,8 @@ static void m6502_gen_load_imm ( DisasContext *dc ) {
 	/* Load register */
 	value = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
 	tcg_gen_movi_i32 ( dest->var, value );
-	tcg_gen_movi_i32 ( cpu_p_z.var, ( ( value == 0 ) ? 1 : 0 ) );
-	tcg_gen_movi_i32 ( cpu_p_n.var, ( ( value & 0x80 ) ? 1 : 0 ) );
+	tcg_gen_movi_i32 ( cpu_p_nz.var, value );
+	tcg_gen_movi_i32 ( cpu_p_n.var, ( value & 0x80 ) );
 
 	/* Generate disassembly */
 	LOG_DIS ( "&%04X : LD%s #&%02X\n", dc->pc, dest->name, value );
@@ -274,7 +313,7 @@ static void m6502_gen_load ( DisasContext *dc ) {
 
 	/* Load register */
 	tcg_gen_qemu_ld8u ( dest->var, dc->address, MEM_INDEX );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, dest->var, 0 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, dest->var );
 	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );
 
 	/* Generate disassembly */
@@ -307,7 +346,7 @@ static void m6502_gen_transfer ( DisasContext *dc ) {
 
 	/* Transfer register */
 	tcg_gen_mov_i32 ( dest->var, src->var );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, dest->var, 0 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, dest->var );
 	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );
 
 	/* Generate disassembly */
@@ -318,6 +357,8 @@ static void m6502_gen_transfer ( DisasContext *dc ) {
  *
  * Flag set/clear instructions
  *
+ * These may only operate on flags for which the valid values are zero
+ * and one.
  */
 
 /**
@@ -328,7 +369,7 @@ static void m6502_gen_transfer ( DisasContext *dc ) {
 static void m6502_gen_clear ( DisasContext *dc ) {
 	M6502Register *dest = dc->insn->dest;
 
-	/* Set flag */
+	/* Clear flag */
 	tcg_gen_movi_i32 ( dest->var, 0 );
 
 	/* Generate disassembly */
@@ -367,7 +408,7 @@ static void m6502_gen_and_imm ( DisasContext *dc ) {
 
 	/* Generate logical AND */
 	tcg_gen_andi_i32 ( dest->var, dest->var, value );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, dest->var, 0 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, dest->var );
 	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );
 
 	/* Generate disassembly */
@@ -387,7 +428,7 @@ static void m6502_gen_and ( DisasContext *dc ) {
 	value = tcg_temp_new_i32();
 	tcg_gen_qemu_ld8u ( value, dc->address, MEM_INDEX );
 	tcg_gen_and_i32 ( dest->var, dest->var, value );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, dest->var, 0 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, dest->var );
 	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );	
 	tcg_temp_free_i32 ( value );
 
@@ -406,7 +447,7 @@ static void m6502_gen_or_imm ( DisasContext *dc ) {
 
 	/* Generate logical OR */
 	tcg_gen_ori_i32 ( dest->var, dest->var, value );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, dest->var, 0 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, dest->var );
 	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );
 
 	/* Generate disassembly */
@@ -426,7 +467,7 @@ static void m6502_gen_or ( DisasContext *dc ) {
 	value = tcg_temp_new_i32();
 	tcg_gen_qemu_ld8u ( value, dc->address, MEM_INDEX );
 	tcg_gen_or_i32 ( dest->var, dest->var, value );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, dest->var, 0 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, dest->var );
 	tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );	
 	tcg_temp_free_i32 ( value );
 
@@ -486,10 +527,10 @@ static void m6502_gen_asl ( DisasContext *dc ) {
 
 	/* Perform shift left */
 	value = m6502_rmw_load ( dc );
-	tcg_gen_andi_i32 ( cpu_p_c.var, value, 0x80 );
+	tcg_gen_shri_i32 ( cpu_p_v.var, value, 7 );
 	tcg_gen_shli_i32 ( value, value, 1 );
 	tcg_gen_andi_i32 ( value, value, 0xff );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, value, 0 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, value );
 	tcg_gen_andi_i32 ( cpu_p_n.var, value, 0x80 );
 	m6502_rmw_store ( dc, value );
 
@@ -511,7 +552,7 @@ static void m6502_gen_lsr ( DisasContext *dc ) {
 	value = m6502_rmw_load ( dc );
 	tcg_gen_andi_i32 ( cpu_p_c.var, value, 0x01 );
 	tcg_gen_shri_i32 ( value, value, 1 );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, value, 0 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, value );
 	tcg_gen_movi_i32 ( cpu_p_n.var, 0 );
 	m6502_rmw_store ( dc, value );
 
@@ -531,12 +572,11 @@ static void m6502_gen_rol ( DisasContext *dc ) {
 
 	/* Perform rotate left */
 	value = m6502_rmw_load ( dc );
-	tcg_gen_setcondi_i32 ( TCG_COND_NE, cpu_p_c.var, cpu_p_c.var, 0 );
 	tcg_gen_shli_i32 ( value, value, 1 );
 	tcg_gen_or_i32 ( value, value, cpu_p_c.var );
-	tcg_gen_andi_i32 ( cpu_p_c.var, value, 0x100 );
+	tcg_gen_shri_i32 ( cpu_p_c.var, value, 8 );
 	tcg_gen_andi_i32 ( value, value, 0xff );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, value, 0 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, value );
 	tcg_gen_andi_i32 ( cpu_p_n.var, value, 0x80 );
 	m6502_rmw_store ( dc, value );
 
@@ -556,11 +596,10 @@ static void m6502_gen_ror ( DisasContext *dc ) {
 
 	/* Perform rotate right */
 	value = m6502_rmw_load ( dc );
-	tcg_gen_setcondi_i32 ( TCG_COND_NE, cpu_p_c.var, cpu_p_c.var, 0 );
 	tcg_gen_deposit_i32 ( value, value, cpu_p_c.var, 8, 1 );
 	tcg_gen_andi_i32 ( cpu_p_c.var, value, 0x01 );
 	tcg_gen_shri_i32 ( value, value, 1 );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, value, 0 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, value );
 	tcg_gen_andi_i32 ( cpu_p_n.var, value, 0x80 );
 	m6502_rmw_store ( dc, value );
 
@@ -582,7 +621,7 @@ static void m6502_gen_inc ( DisasContext *dc ) {
 	value = m6502_rmw_load ( dc );
 	tcg_gen_addi_i32 ( value, value, 1 );
 	tcg_gen_andi_i32 ( value, value, 0xff );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, value, 0 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, value );
 	tcg_gen_andi_i32 ( cpu_p_n.var, value, 0x80 );
 	m6502_rmw_store ( dc, value );
 
@@ -605,7 +644,7 @@ static void m6502_gen_dec ( DisasContext *dc ) {
 	value = m6502_rmw_load ( dc );
 	tcg_gen_subi_i32 ( value, value, 1 );
 	tcg_gen_andi_i32 ( value, value, 0xff );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, value, 0 );
+	tcg_gen_mov_i32 ( cpu_p_nz.var, value );
 	tcg_gen_andi_i32 ( cpu_p_n.var, value, 0x80 );
 	m6502_rmw_store ( dc, value );
 
@@ -706,7 +745,7 @@ static void m6502_gen_comp_imm ( DisasContext *dc ) {
 	/* Generate comparison */
 	value = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
 	tcg_gen_setcondi_i32 ( TCG_COND_GE, cpu_p_c.var, src->var, value );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, src->var, value );
+	tcg_gen_subi_i32 ( cpu_p_nz.var, src->var, value );
 	tcg_gen_subi_i32 ( cpu_p_n.var, src->var, value );
 	tcg_gen_andi_i32 ( cpu_p_n.var, cpu_p_n.var, 0x80 );
 
@@ -729,7 +768,7 @@ static void m6502_gen_comp ( DisasContext *dc ) {
 	value = tcg_temp_new_i32();
 	tcg_gen_qemu_ld8u ( value, dc->address, MEM_INDEX );
 	tcg_gen_setcond_i32 ( TCG_COND_GE, cpu_p_c.var, src->var, value );
-	tcg_gen_setcond_i32 ( TCG_COND_EQ, cpu_p_z.var, src->var, value );
+	tcg_gen_sub_i32 ( cpu_p_nz.var, src->var, value );
 	tcg_gen_sub_i32 ( cpu_p_n.var, src->var, value );
 	tcg_gen_andi_i32 ( cpu_p_n.var, cpu_p_n.var, 0x80 );
 	tcg_temp_free_i32 ( value );
@@ -752,10 +791,10 @@ static void m6502_gen_bit ( DisasContext *dc ) {
 	/* Generate bit test */
 	value = tcg_temp_new_i32();
 	tcg_gen_qemu_ld8u ( value, dc->address, MEM_INDEX );
-	tcg_gen_andi_i32 ( cpu_p_v.var, value, 0x40 );
+	tcg_gen_shri_i32 ( cpu_p_v.var, value, 6 );
+	tcg_gen_andi_i32 ( cpu_p_v.var, value, 0x01 );
 	tcg_gen_andi_i32 ( cpu_p_n.var, value, 0x80 );
-	tcg_gen_and_i32 ( value, value, src->var );
-	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, value, 0 );
+	tcg_gen_and_i32 ( cpu_p_nz.var, value, src->var );
 	tcg_temp_free_i32 ( value );
 
 	/* Generate disassembly */
@@ -805,9 +844,9 @@ static void m6502_gen_branch ( DisasContext *dc, TCGCond condition ) {
 		condition_desc_buf[1] = ( ( condition == TCG_COND_NE ) ?
 					  'S' : 'C' );
 		condition_desc = condition_desc_buf;
-		if ( src == &cpu_p_z ) {
+		if ( src == &cpu_p_nz ) {
 			condition_desc = ( ( condition == TCG_COND_NE ) ?
-					   condition_eq : condition_ne );
+					   condition_ne : condition_eq );
 		} else if ( src == &cpu_p_n ) {
 			condition_desc = ( ( condition == TCG_COND_NE ) ?
 					   condition_mi : condition_pl );
@@ -818,7 +857,7 @@ static void m6502_gen_branch ( DisasContext *dc, TCGCond condition ) {
 }
 
 /**
- * Generate branch instruction (BCS, BEQ, BMI, BVS)
+ * Generate branch instruction (BCS, BNE, BMI, BVS)
  *
  * @v dc		Disassembly context
  */
@@ -827,7 +866,7 @@ static void m6502_gen_br_set ( DisasContext *dc ) {
 }
 
 /**
- * Generate branch instruction (BCC, BNE, BPL, BVC)
+ * Generate branch instruction (BCC, BEQ, BPL, BVC)
  *
  * @v dc		Disassembly context
  */
@@ -966,14 +1005,14 @@ static const M6502Instruction m6502_instructions[256] = {
 	/* BCS */
 	[0xb0] = { m6502_gen_br_set,	NULL, &cpu_p_c,	NULL,		2 },
 	/* BEQ */
-	[0xf0] = { m6502_gen_br_set,	NULL, &cpu_p_z,	NULL,		2 },
+	[0xf0] = { m6502_gen_br_clear,	NULL, &cpu_p_nz, NULL,		2 },
 	/* BIT */
 	[0x24] = { m6502_gen_bit,	NULL,	&cpu_a,	m6502_zero,	2 },
 	[0x2c] = { m6502_gen_bit,	NULL,	&cpu_a,	m6502_abs,	3 },
 	/* BMI */
 	[0x30] = { m6502_gen_br_set,	NULL, &cpu_p_n,	NULL,		2 },
 	/* BNE */
-	[0xd0] = { m6502_gen_br_clear,	NULL, &cpu_p_z,	NULL,		2 },
+	[0xd0] = { m6502_gen_br_set,	NULL, &cpu_p_nz, NULL,		2 },
 	/* BPL */
 	[0x10] = { m6502_gen_br_clear,	NULL, &cpu_p_n,	NULL,		2 },
 	/* BVC */
@@ -1214,29 +1253,29 @@ void m6502_translate_init ( void ) {
 	cpu_y.var = tcg_global_mem_new ( TCG_AREG0,
 					 offsetof ( CPUM6502State, y ), "y" );
 	cpu_p_c.var = tcg_global_mem_new ( TCG_AREG0,
-					   offsetof ( CPUM6502State, p[P_C] ),
+					   offsetof ( CPUM6502State, p_c ),
 					   "p.c" );
-	cpu_p_z.var = tcg_global_mem_new ( TCG_AREG0,
-					   offsetof ( CPUM6502State, p[P_Z] ),
-					   "p.c" );
+	cpu_p_nz.var = tcg_global_mem_new ( TCG_AREG0,
+					    offsetof ( CPUM6502State, p_nz ),
+					    "p.nz" );
 	cpu_p_i.var = tcg_global_mem_new ( TCG_AREG0,
-					   offsetof ( CPUM6502State, p[P_I] ),
-					   "p.c" );
+					   offsetof ( CPUM6502State, p_i ),
+					   "p.i" );
 	cpu_p_d.var = tcg_global_mem_new ( TCG_AREG0,
-					   offsetof ( CPUM6502State, p[P_D] ),
-					   "p.c" );
+					   offsetof ( CPUM6502State, p_d ),
+					   "p.d" );
 	cpu_p_b.var = tcg_global_mem_new ( TCG_AREG0,
-					   offsetof ( CPUM6502State, p[P_B] ),
-					   "p.c" );
+					   offsetof ( CPUM6502State, p_b ),
+					   "p.b" );
 	cpu_p_u.var = tcg_global_mem_new ( TCG_AREG0,
-					   offsetof ( CPUM6502State, p[P_U] ),
-					   "p.c" );
+					   offsetof ( CPUM6502State, p_u ),
+					   "p.u" );
 	cpu_p_v.var = tcg_global_mem_new ( TCG_AREG0,
-					   offsetof ( CPUM6502State, p[P_V] ),
-					   "p.c" );
+					   offsetof ( CPUM6502State, p_v ),
+					   "p.v" );
 	cpu_p_n.var = tcg_global_mem_new ( TCG_AREG0,
-					   offsetof ( CPUM6502State, p[P_N] ),
-					   "p.c" );
+					   offsetof ( CPUM6502State, p_n ),
+					   "p.n" );
 	cpu_s.var = tcg_global_mem_new ( TCG_AREG0,
 					 offsetof ( CPUM6502State, s ), "s" );
 	cpu_pc = tcg_global_mem_new ( TCG_AREG0,

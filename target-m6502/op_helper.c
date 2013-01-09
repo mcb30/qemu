@@ -44,20 +44,9 @@ void helper_dump_state ( CPUM6502State *env ) {
 }
 
 uint32_t helper_get_p ( CPUM6502State *env ) {
-	uint8_t p = 0;
-	unsigned int i;
-
-	/* Assemble status register value */
-	for ( i = 0 ; i < 8 ; i++ )
-		p |= ( ( !! env->p[i] ) << i );
-
-	return p;
+	return m6502_get_p ( env );
 }
 
 void helper_set_p ( CPUM6502State *env, uint32_t p ) {
-	unsigned int i;
-
-	/* Assemble status register value */
-	for ( i = 0 ; i < 8 ; i++ )
-		env->p[i] = ( p & ( 1 << i ) );
+	m6502_set_p ( env, p );
 }

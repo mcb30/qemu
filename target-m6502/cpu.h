@@ -75,12 +75,51 @@ typedef struct CPUM6502State {
 	uint32_t x;
 	/** Y index register (Y) */
 	uint32_t y;
-	/** Status register (P)
+	/** Carry flag
 	 *
-	 * Stored as individual bits for efficiency of TCG-generated
-	 * code.  Any non-zero value counts as a set flag.
+	 * Valid values are zero and one.
 	 */
-	uint32_t p[8];
+	uint32_t p_c;
+	/** Not zero flag
+	 *
+	 * Zero flag is set iff this value is zero.  Defining the flag
+	 * this way allows us to eliminate some conditional logic; we
+	 * can simply store the value being tested directly into p_nz.
+	 */
+	uint32_t p_nz;
+	/** Interrupt disable
+	 *
+	 * Valid values are zero and one.
+	 */
+	uint32_t p_i;
+	/** Decimal mode
+	 *
+	 * Valid values are zero and one.
+	 */
+	uint32_t p_d;
+	/** Break flag
+	 *
+	 * Valid values are zero and one.
+	 */
+	uint32_t p_b;
+	/** Unused flag
+	 *
+	 * Valid values are zero and one.
+	 */
+	uint32_t p_u;
+	/** Overflow flag
+	 *
+	 * Valid values are zero and one.
+	 */
+	uint32_t p_v;
+	/** Negative flag
+	 *
+	 * Valid values are zero and (1<<P_N).  Defining the flag this
+	 * way allows us to eliminate some conditional logic; we can
+	 * simply AND the value being tested with (1<<P_N) and store
+	 * the result in p_n.
+	 */
+	uint32_t p_n;
 	/** Stack pointer (S) */
 	uint32_t s;
 	/** Program counter */
@@ -95,6 +134,9 @@ typedef struct CPUM6502State {
 
 #include "cpu-qom.h"
 
+extern unsigned int m6502_get_p ( CPUM6502State *env );
+extern void m6502_set_p ( CPUM6502State *env, unsigned int p );
+
 /**
  * Check if interrupts are enabled
  *
@@ -102,7 +144,7 @@ typedef struct CPUM6502State {
  * @ret enabled		Interrupts are enabled
  */
 static inline int m6502_interrupts_enabled ( CPUM6502State *env ) {
-	return ( ! env->p[P_I] );
+	return ( ! env->p_i );
 }
 #define cpu_interrupts_enabled m6502_interrupts_enabled
 
