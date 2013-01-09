@@ -28,7 +28,7 @@ static const VMStateDescription vmstate_cpu = {
 		VMSTATE_UINT32 ( a, CPUM6502State ),
 		VMSTATE_UINT32 ( x, CPUM6502State ),
 		VMSTATE_UINT32 ( y, CPUM6502State ),
-		VMSTATE_UINT32 ( p, CPUM6502State ),
+		VMSTATE_UINT32_ARRAY ( p, CPUM6502State, 8 ),
 		VMSTATE_UINT32 ( s, CPUM6502State ),
 		VMSTATE_UINT32 ( pc, CPUM6502State ),
 		VMSTATE_END_OF_LIST()

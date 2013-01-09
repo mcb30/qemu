@@ -34,7 +34,8 @@ static void m6502_reset ( CPUState *s ) {
 	env->a = 0;
 	env->x = 0;
 	env->y = 0;
-	env->p = P_I;
+	memset ( env->p, 0, sizeof ( env->p ) );
+	env->p[P_I] = 1;
 	env->s = 0;
 	env->pc = 0;
 	tlb_flush ( env, 1 );

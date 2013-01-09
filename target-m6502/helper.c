@@ -116,17 +116,25 @@ CPUM6502State * m6502_init ( const char *name ) {
  */
 void m6502_dump_state ( CPUM6502State *env, FILE *f, fprintf_function fprintf,
 			int flags ) {
+	uint8_t p = 0;
+	unsigned int i;
 
+	/* Assemble status register value */
+	for ( i = 0 ; i < 8 ; i++ )
+		p |= ( env->p[i] << i );
+
+	/* Dump state */
 	fprintf ( f, "PC=%04x A=%02x X=%02x Y=%02x S=01%02x "
-		  "P=%02x(%c%c%c%c%c%c%c)\n", env->pc, env->a, env->x,
-		  env->y, env->s, env->p,
-		  ( ( env->p & P_N ) ? 'N' : 'n' ),
-		  ( ( env->p & P_V ) ? 'V' : 'v' ),
-		  ( ( env->p & P_B ) ? 'B' : 'b' ),
-		  ( ( env->p & P_D ) ? 'D' : 'd' ),
-		  ( ( env->p & P_I ) ? 'I' : 'i' ),
-		  ( ( env->p & P_Z ) ? 'Z' : 'z' ),
-		  ( ( env->p & P_C ) ? 'C' : 'c' ) );
+		  "P=%02x(%c%c%c%c%c%c%c%c)\n", env->pc, env->a, env->x,
+		  env->y, env->s, p,
+		  ( env->p[P_N] ? 'N' : 'n' ),
+		  ( env->p[P_V] ? 'V' : 'v' ),
+		  ( env->p[P_U] ? 'U' : 'u' ),
+		  ( env->p[P_B] ? 'B' : 'b' ),
+		  ( env->p[P_D] ? 'D' : 'd' ),
+		  ( env->p[P_I] ? 'I' : 'i' ),
+		  ( env->p[P_Z] ? 'Z' : 'z' ),
+		  ( env->p[P_C] ? 'C' : 'c' ) );
 }
 
 void m6502_tlb_fill ( CPUM6502State *env, target_ulong addr,

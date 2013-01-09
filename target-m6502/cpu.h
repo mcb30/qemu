@@ -40,20 +40,21 @@
 /** Status register bits */
 enum {
 	/** Carry flag */
-	P_C = 0x01,
+	P_C = 0,
 	/** Zero flag */
-	P_Z = 0x02,
+	P_Z = 1,
 	/** Interrupt disable */
-	P_I = 0x04,
+	P_I = 2,
 	/** Decimal mode */
-	P_D = 0x08,
+	P_D = 3,
 	/** Break flag */
-	P_B = 0x10,
-
+	P_B = 4,
+	/** Unused flag */
+	P_U = 5,
 	/** Overflow flag */
-	P_V = 0x40,
+	P_V = 6,
 	/** Negative flag */
-	P_N = 0x80,
+	P_N = 7,
 };
 
 /** CPU feature bits */
@@ -74,8 +75,11 @@ typedef struct CPUM6502State {
 	uint32_t x;
 	/** Y index register (Y) */
 	uint32_t y;
-	/** Processor status register (P) */
-	uint32_t p;
+	/** Status register (P)
+	 *
+	 * Stored as individual bits for TCG efficiency.
+	 */
+	uint32_t p[8];
 	/** Stack pointer (S) */
 	uint32_t s;
 	/** Program counter */
@@ -97,7 +101,7 @@ typedef struct CPUM6502State {
  * @ret enabled		Interrupts are enabled
  */
 static inline int m6502_interrupts_enabled ( CPUM6502State *env ) {
-	return ( ! ( env->p & P_I ) );
+	return ( ! env->p[P_I] );
 }
 #define cpu_interrupts_enabled m6502_interrupts_enabled
 

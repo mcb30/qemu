@@ -40,7 +40,14 @@ static TCGv_ptr cpu_env;
 static M6502Register cpu_a = { .name = 'A' };
 static M6502Register cpu_x = { .name = 'X' };
 static M6502Register cpu_y = { .name = 'Y' };
-static M6502Register cpu_p = { .name = 'P' };
+static M6502Register cpu_p_c = { .name = 'C' };
+static M6502Register cpu_p_z = { .name = 'Z' };
+static M6502Register cpu_p_i = { .name = 'I' };
+static M6502Register cpu_p_d = { .name = 'D' };
+static M6502Register cpu_p_b = { .name = 'B' };
+static M6502Register cpu_p_u = { .name = 'U' };
+static M6502Register cpu_p_v = { .name = 'V' };
+static M6502Register cpu_p_n = { .name = 'N' };
 static M6502Register cpu_s = { .name = 'S' };
 static TCGv_i32 cpu_pc;
 
@@ -172,9 +179,15 @@ static void m6502_gen_load_imm ( DisasContext *dc ) {
 	M6502Register *dest = dc->insn->dest;
 	uint8_t value;
 
+	/* Load register */
 	value = cpu_ldub_code ( dc->env, ( dc->pc + 1 ) );
 	tcg_gen_movi_i32 ( dest->var, value );
 
+	/* Update flags */
+	tcg_gen_movi_i32 ( cpu_p_z.var, ( ( value == 0 ) ? 1 : 0 ) );
+	tcg_gen_movi_i32 ( cpu_p_n.var, ( ( value & 0x80 ) ? 1 : 0 ) );
+
+	/* Generate disassembly */
 	LOG_DIS ( "&%04X : LD%c #&%02X\n", dc->pc, dest->name, value );
 }
 
@@ -182,8 +195,14 @@ static void m6502_gen_load_imm ( DisasContext *dc ) {
 static void m6502_gen_load ( DisasContext *dc ) {
 	M6502Register *dest = dc->insn->dest;
 
+	/* Load register */
 	tcg_gen_qemu_ld8u ( dest->var, dc->address, MEM_INDEX );
 
+	/* Update flags */
+	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, dest->var, 0 );
+	tcg_gen_setcondi_i32 ( TCG_COND_GE, cpu_p_n.var, dest->var, 0x80 );
+
+	/* Generate disassembly */
 	LOG_DIS ( "&%04X : LD%c %s\n", dc->pc, dest->name, dc->address_desc );
 }
 
@@ -191,8 +210,12 @@ static void m6502_gen_load ( DisasContext *dc ) {
 static void m6502_gen_store ( DisasContext *dc ) {
 	M6502Register *src = dc->insn->src;
 
+	/* Store register */
 	tcg_gen_qemu_st8 ( src->var, dc->address, MEM_INDEX );
 
+	/* Flags are not affected */
+
+	/* Generate disassembly */
 	LOG_DIS ( "&%04X : ST%c %s\n", dc->pc, src->name, dc->address_desc );
 }
 
@@ -201,9 +224,26 @@ static void m6502_gen_transfer ( DisasContext *dc ) {
 	M6502Register *dest = dc->insn->dest;
 	M6502Register *src = dc->insn->src;
 
+	/* Transfer register */
 	tcg_gen_mov_i32 ( dest->var, src->var );
 
+	/* Update flags */
+	tcg_gen_setcondi_i32 ( TCG_COND_EQ, cpu_p_z.var, dest->var, 0 );
+	tcg_gen_setcondi_i32 ( TCG_COND_GE, cpu_p_n.var, dest->var, 0x80 );
+
+	/* Generate disassembly */
 	LOG_DIS ( "&%04X : T%c%c\n", dc->pc, src->name, dest->name );
+}
+
+/* SEC, SED, SEI */
+static void m6502_set_flag ( DisasContext *dc ) {
+	M6502Register *dest = dc->insn->dest;
+
+	/* Set flag */
+	tcg_gen_movi_i32 ( dest->var, 1 );
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : SE%c\n", dc->pc, dest->name );
 }
 
 /** Instruction table */
@@ -229,6 +269,12 @@ static const M6502Instruction m6502_instructions[256] = {
 	[0xb4] = { m6502_gen_load,	&cpu_y,	NULL,	m6502_zero_x,	2 },
 	[0xac] = { m6502_gen_load,	&cpu_y,	NULL,	m6502_abs,	3 },
 	[0xbc] = { m6502_gen_load,	&cpu_y,	NULL,	m6502_abs_x,	3 },
+	/* SEC */
+	[0x38] = { m6502_set_flag,	&cpu_p_c, NULL,	NULL,		1 },
+	/* SED */
+	[0xf8] = { m6502_set_flag,	&cpu_p_d, NULL,	NULL,		1 },
+	/* SEI */
+	[0x78] = { m6502_set_flag,	&cpu_p_i, NULL,	NULL,		1 },
 	/* STA */
 	[0x85] = { m6502_gen_store,	NULL,	&cpu_a,	m6502_zero,	2 },
 	[0x95] = { m6502_gen_store,	NULL,	&cpu_a,	m6502_zero_x,	2 },
@@ -345,8 +391,30 @@ void m6502_translate_init ( void ) {
 					 offsetof ( CPUM6502State, x ), "x" );
 	cpu_y.var = tcg_global_mem_new ( TCG_AREG0,
 					 offsetof ( CPUM6502State, y ), "y" );
-	cpu_p.var = tcg_global_mem_new ( TCG_AREG0,
-					 offsetof ( CPUM6502State, p ), "p" );
+	cpu_p_c.var = tcg_global_mem_new ( TCG_AREG0,
+					   offsetof ( CPUM6502State, p[P_C] ),
+					   "p.c" );
+	cpu_p_z.var = tcg_global_mem_new ( TCG_AREG0,
+					   offsetof ( CPUM6502State, p[P_Z] ),
+					   "p.c" );
+	cpu_p_i.var = tcg_global_mem_new ( TCG_AREG0,
+					   offsetof ( CPUM6502State, p[P_I] ),
+					   "p.c" );
+	cpu_p_d.var = tcg_global_mem_new ( TCG_AREG0,
+					   offsetof ( CPUM6502State, p[P_D] ),
+					   "p.c" );
+	cpu_p_b.var = tcg_global_mem_new ( TCG_AREG0,
+					   offsetof ( CPUM6502State, p[P_B] ),
+					   "p.c" );
+	cpu_p_u.var = tcg_global_mem_new ( TCG_AREG0,
+					   offsetof ( CPUM6502State, p[P_U] ),
+					   "p.c" );
+	cpu_p_v.var = tcg_global_mem_new ( TCG_AREG0,
+					   offsetof ( CPUM6502State, p[P_V] ),
+					   "p.c" );
+	cpu_p_n.var = tcg_global_mem_new ( TCG_AREG0,
+					   offsetof ( CPUM6502State, p[P_N] ),
+					   "p.c" );
 	cpu_s.var = tcg_global_mem_new ( TCG_AREG0,
 					 offsetof ( CPUM6502State, s ), "s" );
 	cpu_pc = tcg_global_mem_new ( TCG_AREG0,
