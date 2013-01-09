@@ -80,6 +80,8 @@ struct DisasContext {
 	char address_desc[16];
 
 	int is_jmp;
+	unsigned int num_insns;
+	unsigned int offset;
 };
 
 /******************************************************************************
@@ -1162,6 +1164,9 @@ static void m6502_gen_break ( DisasContext *dc ) {
 
 	/* Stop translation */
 	dc->is_jmp = DISAS_JUMP;
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : BRK\n", dc->pc );
 }
 
 /**
@@ -1175,7 +1180,7 @@ static void m6502_gen_nop ( DisasContext *dc ) {
 
 /******************************************************************************
  *
- * Instruction tables
+ * Instruction generator
  *
  */
 
@@ -1388,6 +1393,71 @@ static const M6502Instruction m6502_instructions[256] = {
 	[0x98] = { m6502_gen_transfer,	&cpu_a,	&cpu_y,	NULL,		1 },
 };
 
+/**
+ * Check for breakpoints
+ *
+ * @v dc		Disassembly context
+ * @ret hit		Breakpoint hit
+ */
+static int m6502_check_breakpoints ( DisasContext *dc ) {
+	CPUBreakpoint *bp;
+	TCGv_i32 excp;
+
+	/* Do nothing if there are no breakpoints */
+	if ( likely ( QTAILQ_EMPTY ( &dc->env->breakpoints ) ) )
+		return 0;
+
+	/* Scan through list of breakpoints */
+	QTAILQ_FOREACH ( bp, &dc->env->breakpoints, entry ) {
+		if ( bp->pc != dc->pc ) {
+
+			/* Update program counter */
+			tcg_gen_movi_i32 ( cpu_pc, dc->pc );
+
+			/* Raise exception */
+			excp = tcg_const_i32 ( EXCP_DEBUG );
+			gen_helper_exception ( cpu_env, excp );
+			tcg_temp_free_i32 ( excp );
+
+			/* Stop translation */
+			dc->is_jmp = DISAS_UPDATE;
+
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * Fill in TCG opcode metadata
+ *
+ * @v dc		Disassembly context
+ */
+static void m6502_opcode_metadata ( DisasContext *dc ) {
+	unsigned int offset;
+
+	/* Clear the "start of instruction" flag for all opcodes since the
+	 * start of the preceding instruction.
+	 */
+	offset = ( tcg_ctx.gen_opc_ptr - tcg_ctx.gen_opc_buf );
+	if ( dc->offset < offset ) {
+		dc->offset++;
+		while ( dc->offset < offset )
+			tcg_ctx.gen_opc_instr_start[dc->offset++] = 0;
+	}
+
+	/* Record metadata for this opcode's instruction */
+	tcg_ctx.gen_opc_pc[offset] = dc->pc;
+	tcg_ctx.gen_opc_instr_start[offset] = 1;
+	tcg_ctx.gen_opc_icount[offset] = dc->num_insns;
+}
+
+/**
+ * Generate a single instruction
+ *
+ * @v dc		Disassembly context
+ */
 static size_t m6502_gen_instruction ( DisasContext *dc ) {
 	const M6502Instruction *insn;
 	uint8_t opcode;
@@ -1396,11 +1466,6 @@ static size_t m6502_gen_instruction ( DisasContext *dc ) {
 	opcode = cpu_ldub_code ( dc->env, dc->pc );
 	dc->insn = insn = &m6502_instructions[opcode];
 	if ( ! insn->gen ) {
-
-		//
-		LOG_DIS ( "&%04X : unknown opcode &%02X\n", dc->pc, opcode );
-		//return 0;
-
 		cpu_abort ( dc->env, "Unknown opcode %02x at %04x\n",
 			    opcode, dc->pc );
 		return 0;
@@ -1420,58 +1485,129 @@ static size_t m6502_gen_instruction ( DisasContext *dc ) {
 	return insn->len;
 }
 
-void m6502_gen_intermediate_code ( CPUM6502State *env,
-				   struct TranslationBlock *tb ) {
+/**
+ * Generate a block of instructions
+ *
+ * @v env		CPU state
+ * @v tb		Translation block
+ * @v search_pc		Generate opcode metadata
+ */
+static void m6502_gen_intermediate_code_internal ( CPUM6502State *env,
+						   struct TranslationBlock *tb,
+						   int search_pc ) {
 	DisasContext ctx;
 	DisasContext *dc = &ctx;
 	hwaddr pc_start = tb->pc;
-	unsigned int num_insns = 0;
+	uint16_t *gen_opc_end;
+	unsigned int max_insns;
 	size_t len;
 
 	printf ( "gen_intermediate_code() pc=%04x\n", tb->pc );
 
+	/* Initialise disassembly context */
+	memset ( dc, 0, sizeof ( *dc ) );
 	dc->env = env;
 	dc->pc = pc_start;
 	dc->tb = tb;
 	dc->is_jmp = DISAS_NEXT;
+	dc->offset = -1;
 
+	/* Initialise parameters */
+	gen_opc_end = ( tcg_ctx.gen_opc_buf + OPC_MAX_SIZE );
+	max_insns = ( tb->cflags & CF_COUNT_MASK );
+	if ( max_insns == 0 )
+		max_insns = CF_COUNT_MASK;
 	gen_icount_start();
+
+	/* Main instruction generation loop */
 	do {
+		/* Check for breakpoints */
+		if ( m6502_check_breakpoints ( dc ) )
+			break;
+
+		/* Fill in opcode metadata, if applicable */
+		if ( search_pc )
+			m6502_opcode_metadata ( dc );
+
+		/* Allow I/O on last instruction if applicable(?) */
+		if ( ( ( dc->num_insns + 1 ) == max_insns ) &&
+		     ( tb->cflags & CF_LAST_IO ) ) {
+			gen_io_start();
+		}
+
+		/* Generate instruction */
 		len = m6502_gen_instruction ( dc );
 		dc->pc += len;
-		num_insns++;
-	} while ( len && ( dc->is_jmp == DISAS_NEXT ) );
+		dc->num_insns++;
 
-	if ( dc->is_jmp == DISAS_NEXT )
+	} while ( ( dc->is_jmp == DISAS_NEXT ) &&
+		  ( tcg_ctx.gen_opc_ptr < gen_opc_end ) &&
+		  ( ! env->singlestep_enabled ) &&
+		  ( ! singlestep ) &&
+		  ( dc->num_insns < max_insns ) );
+
+	/* Disallow I/O if applicable(?) */
+	if ( tb->cflags & CF_LAST_IO )
+		gen_io_end();
+
+	/* Update program counter and stop translation, if not already done */
+	if ( dc->is_jmp == DISAS_NEXT ) {
 		tcg_gen_movi_i32 ( cpu_pc, dc->pc );
-	if ( dc->pc == tb->pc )
-		gen_helper_hlt ( cpu_env );
-	tcg_gen_exit_tb ( 0 );
+		tcg_gen_exit_tb ( 0 );
+	}
 
-	gen_icount_end ( tb, num_insns );
+	/* Finalise translation block */
+	gen_icount_end ( tb, dc->num_insns );
 	*tcg_ctx.gen_opc_ptr = INDEX_op_end;
+	if ( search_pc ) {
+		m6502_opcode_metadata ( dc );
+		tcg_ctx.gen_opc_instr_start[dc->offset] = 0;
+	}
 	tb->size = ( dc->pc - pc_start );
-	tb->icount = num_insns;
+	tb->icount = dc->num_insns;
 }
 
+/**
+ * Generate a block of instructions
+ *
+ * @v env		CPU state
+ * @v tb		Translation block
+ */
+void m6502_gen_intermediate_code ( CPUM6502State *env,
+				   struct TranslationBlock *tb ) {
+	m6502_gen_intermediate_code_internal ( env, tb, 0 );
+}
+
+/**
+ * Generate a block of instructions and program counter information
+ *
+ * @v env		CPU state
+ * @v tb		Translation block
+ */
 void m6502_gen_intermediate_code_pc ( CPUM6502State *env,
 				      struct TranslationBlock *tb ) {
-
-	printf ( "gen_intermediate_code_pc()\n" );
+	m6502_gen_intermediate_code_internal ( env, tb, 1 );
 }
 
+/**
+ * Restore state to opcode within translation block
+ *
+ * @v env		CPU state
+ * @v tb		Translation block
+ * @v pc_pos		Offset within opcode list
+ */
 void m6502_restore_state_to_opc ( CPUM6502State *env,
 				  TranslationBlock *tb, int pc_pos ) {
-
-	printf ( "restore_state_to_opc\n" );
-
 	env->pc = tcg_ctx.gen_opc_pc[pc_pos];
 }
 
+/**
+ * Initialise translation
+ *
+ */
 void m6502_translate_init ( void ) {
 
-	printf ( "translate_init()\n" );
-
+	/* Create TCG variables for all CPU registers */
 	cpu_env = tcg_global_reg_new_ptr ( TCG_AREG0, "env" );
 	cpu_a.var = tcg_global_mem_new ( TCG_AREG0,
 					 offsetof ( CPUM6502State, a ), "a" );

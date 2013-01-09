@@ -39,6 +39,12 @@ void helper_hlt ( CPUM6502State *env ) {
 	cpu_loop_exit ( env );
 }
 
+void helper_exception ( CPUM6502State *env, uint32_t index ) {
+
+	env->exception_index = index;
+	cpu_loop_exit ( env );
+}
+
 void helper_dump_state ( CPUM6502State *env ) {
 	m6502_dump_state ( env, stderr, fprintf, 0 );
 }

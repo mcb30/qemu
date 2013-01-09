@@ -111,7 +111,7 @@ static void bbc_init_fred ( void ) {
 	MemoryRegion *fred = g_new ( MemoryRegion, 1 );
 	static char name[] = "FRED";
 
-	memory_region_init_io ( fred, &bbc_dummy_ops, name, "fred",
+	memory_region_init_io ( fred, &bbc_dummy_ops, name, "bbc.fred",
 				BBC_FRED_SIZE );
 	memory_region_add_subregion_overlap ( address_space_mem, BBC_FRED_BASE,
 					      fred, 1 );
@@ -126,7 +126,7 @@ static void bbc_init_jim ( void ) {
 	MemoryRegion *jim = g_new ( MemoryRegion, 1 );
 	static char name[] = "JIM";
 
-	memory_region_init_io ( jim, &bbc_dummy_ops, name, "jim",
+	memory_region_init_io ( jim, &bbc_dummy_ops, name, "bbc.jim",
 				BBC_JIM_SIZE );
 	memory_region_add_subregion_overlap ( address_space_mem, BBC_JIM_BASE,
 					      jim, 1 );
@@ -141,7 +141,7 @@ static void bbc_init_sheila ( void ) {
 	MemoryRegion *sheila = g_new ( MemoryRegion, 1 );
 	static char name[] = "SHEILA";
 
-	memory_region_init_io ( sheila, &bbc_dummy_ops, name, "sheila",
+	memory_region_init_io ( sheila, &bbc_dummy_ops, name, "bbc.sheila",
 				BBC_SHEILA_SIZE );
 	memory_region_add_subregion_overlap ( address_space_mem,
 					      BBC_SHEILA_BASE, sheila, 1 );
