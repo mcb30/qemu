@@ -1,5 +1,5 @@
 /*
- * MOS Technologies 6502 virtual CPU
+ * MOS Technology 6502 virtual CPU
  *
  * Copyright (C) 2013 Michael Brown <mbrown@fensystems.co.uk>
  *
