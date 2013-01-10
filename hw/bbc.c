@@ -54,7 +54,7 @@ static BBCState bbc;
 
 /******************************************************************************
  *
- * System VIA (SHEILA &40-&4f)
+ * Keyboard
  *
  */
 
@@ -77,29 +77,6 @@ static int bbc_keyboard_pressed ( uint8_t data ) {
 	qemu_log_mask ( CPU_LOG_IOPORT, "BBC: keyboard column %d row %d %s\n",
 			column, row, ( pressed ? "pressed" : "not pressed" ) );
 	return 0;
-}
-
-/**
- * Get contents of slow data bus (system VIA port A)
- *
- * @v via		6522 VIA
- * @v port		Port
- * @ret data		Slow data bus contents
- */
-static uint8_t bbc_slow_data ( M6522VIA *via, M6522VIAPort *port ) {
-	uint8_t data;
-
-	/* Set data equal to outputs for all pins configured as outputs */
-	data = ( port->or & port->ddr );
-
-	/* Read from keyboard into PA7 if keyboard is enabled */
-	if ( ! ( bbc.addressable_latch & ( 1 << BBC_LATCH_KB_WE ) ) ) {
-		data &= ~( 1 << 7 );
-		if ( bbc_keyboard_pressed ( data ) )
-			data |= ( 1 << 7 );
-	}
-
-	return data;
 }
 
 /**
@@ -138,6 +115,35 @@ static void bbc_keyboard_leds ( void ) {
 	qemu_log_mask ( CPU_LOG_IOPORT, "BBC: keyboard leds %s %s\n",
 			( caps_lock ? "CAPSLOCK" : "capslock" ),
 			( shift_lock ? "SHIFTLOCK" : "shiftlock" ) );
+}
+
+/******************************************************************************
+ *
+ * System VIA (SHEILA &40-&4f)
+ *
+ */
+
+/**
+ * Get contents of slow data bus (system VIA port A)
+ *
+ * @v via		6522 VIA
+ * @v port		Port
+ * @ret data		Slow data bus contents
+ */
+static uint8_t bbc_slow_data ( M6522VIA *via, M6522VIAPort *port ) {
+	uint8_t data;
+
+	/* Set data equal to outputs for all pins configured as outputs */
+	data = ( port->or & port->ddr );
+
+	/* Read from keyboard into PA7 if keyboard is enabled */
+	if ( ! ( bbc.addressable_latch & ( 1 << BBC_LATCH_KB_WE ) ) ) {
+		data &= ~( 1 << 7 );
+		if ( bbc_keyboard_pressed ( data ) )
+			data |= ( 1 << 7 );
+	}
+
+	return data;
 }
 
 /**
