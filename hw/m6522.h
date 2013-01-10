@@ -23,8 +23,8 @@
 typedef struct M6522VIA M6522VIA;
 typedef struct M6522VIAPort M6522VIAPort;
 
-/** A 6522 VIA port */
-struct M6522VIAPort {
+/** 6522 VIA port operations */
+typedef struct {
 	/**
 	 * Output to port
 	 *
@@ -41,6 +41,20 @@ struct M6522VIAPort {
 	 * @ret data		Input data
 	 */
 	uint8_t ( * input ) ( M6522VIA *via, M6522VIAPort *port );
+} M6522VIAPortOps;
+
+/** 6522 VIA operations */
+typedef struct {
+	/** Port B operations */
+	M6522VIAPortOps b;
+	/** Port A operations */
+	M6522VIAPortOps a;
+} M6522VIAOps;
+
+/** A 6522 VIA port */
+struct M6522VIAPort {
+	/** Operations */
+	const M6522VIAPortOps *ops;
 	/** Output register */
 	uint8_t or;
 	/** Data direction register */
@@ -49,8 +63,10 @@ struct M6522VIAPort {
 
 /** A 6522 VIA */
 struct M6522VIA {
-	/** Memory region name */
+	/** Name */
 	const char *name;
+	/** Memory region */
+	MemoryRegion mr;
 	/** Port B */
 	M6522VIAPort b;
 	/** Port A */
@@ -58,7 +74,7 @@ struct M6522VIA {
 };
 
 /** Size of memory region */
-#define M6522_VIA_SIZE 16
+#define M6522_SIZE 16
 
 /* Register addresses */
 #define M6522_ORB 0x0
@@ -70,7 +86,7 @@ struct M6522VIA {
 #define M6522_ORA_NO_HS 0xf
 #define M6522_IRA_NO_HS 0xf
 
-extern void m6522_init ( M6522VIA *via, MemoryRegion *parent, hwaddr offset,
-			 unsigned int priority );
+extern void m6522_init ( MemoryRegion *parent, hwaddr offset, const char *name,
+			 const M6522VIAOps *ops );
 
 #endif

@@ -24,6 +24,7 @@
 #include "ui/console.h"
 #include "loader.h"
 #include "m6522.h"
+#include "mc6850.h"
 #include "bbc.h"
 
 /******************************************************************************
@@ -203,9 +204,8 @@ static void bbc_addressable_latch_write ( M6522VIA *via, M6522VIAPort *port,
 	}
 }
 
-/** System VIA */
-static M6522VIA bbc_system_via = {
-	.name = "bbc.sheila.system_via",
+/** System VIA operations */
+static M6522VIAOps bbc_system_via_ops = {
 	.b = {
 		.output = bbc_addressable_latch_write,
 	},
@@ -234,9 +234,8 @@ static void bbc_parallel_write ( M6522VIA *via, M6522VIAPort *port,
 			data, ( isprint ( data ) ? data : '.' ) );
 }
 
-/** User VIA */
-static M6522VIA bbc_user_via = {
-	.name = "bbc.sheila.user_via",
+/** User VIA operations */
+static M6522VIAOps bbc_user_via_ops = {
 	.a = {
 		.output = bbc_parallel_write,
 	},
@@ -334,11 +333,14 @@ static void bbc_init_sheila ( void ) {
 	memory_region_add_subregion_overlap ( address_space_mem,
 					      BBC_SHEILA_BASE, sheila, 1 );
 
+	/* Initialise serial system */
+	mc6850_init ( sheila, BBC_SHEILA_SERIAL, "bbc.serial", serial_hds[0] );
+
 	/* Initialise system and user VIAs */
-	m6522_init ( &bbc_system_via, address_space_mem,
-		     ( BBC_SHEILA_BASE + BBC_SHEILA_SYSTEM_VIA ), 2 );
-	m6522_init ( &bbc_user_via, address_space_mem,
-		     ( BBC_SHEILA_BASE + BBC_SHEILA_USER_VIA ), 2 );
+	m6522_init ( sheila, BBC_SHEILA_SYSTEM_VIA, "bbc.system_via",
+		     &bbc_system_via_ops );
+	m6522_init ( sheila, BBC_SHEILA_USER_VIA, "bbc.user_via",
+		     &bbc_user_via_ops );
 }
 
 /******************************************************************************

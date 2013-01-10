@@ -44,15 +44,15 @@ static void m6522_output ( M6522VIA *via, M6522VIAPort *port, uint8_t data ) {
 	port->or = data;
 
 	/* Output to port */
-	if ( port->output )
-		port->output ( via, port, data );
+	if ( port->ops->output )
+		port->ops->output ( via, port, data );
 }
 
 /**
  * Read from 6522 VIA
  *
- * @v opaque		Region name
- * @v addr		Address within region
+ * @v opaque		6522 VIA
+ * @v addr		Register address
  * @v size		Size of read
  * @ret data		Read data
  */
@@ -63,7 +63,8 @@ static uint64_t m6522_read ( void *opaque, hwaddr addr, unsigned int size ) {
 	/* Read from specified register */
 	switch ( addr ) {
 	case M6522_IRB:
-		data = ( via->b.input ? via->b.input ( via, &via->b ) : 0 );
+		data = ( via->b.ops->input ?
+			 via->b.ops->input ( via, &via->b ) : 0 );
 		/* For IRB (but not IRA), pins programmed as outputs will
 		 * always read back the programmed output value.
 		 */
@@ -72,7 +73,8 @@ static uint64_t m6522_read ( void *opaque, hwaddr addr, unsigned int size ) {
 		break;
 	case M6522_IRA:
 	case M6522_IRA_NO_HS:
-		data = ( via->a.input ? via->a.input ( via, &via->a ) : 0 );
+		data = ( via->a.ops->input ?
+			 via->a.ops->input ( via, &via->a ) : 0 );
 		LOG_M6522 ( "%s: IRA=0x%02x\n", via->name, data );
 		break;
 	case M6522_DDRB:
@@ -93,8 +95,8 @@ static uint64_t m6522_read ( void *opaque, hwaddr addr, unsigned int size ) {
 /**
  * Write to 6522 VIA
  *
- * @v opaque		Region name
- * @v addr		Address within region
+ * @v opaque		6522 VIA
+ * @v addr		Register address
  * @v data64		Data to write
  * @v size		Size of write
  */
@@ -123,8 +125,8 @@ static void m6522_write ( void *opaque, hwaddr addr, uint64_t data64,
 		via->a.ddr = data;
 		break;
 	default:
-		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write to "
-				"0x%02lx\n", via->name, addr );
+		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to "
+				"0x%02lx\n", via->name, data, addr );
 		break;
 	}
 }
@@ -152,19 +154,24 @@ static const VMStateDescription vmstate_m6522 = {
 /**
  * Initialise 6522 VIA
  *
- * @v via		6522 VIA
  * @v parent		Parent memory region
  * @v offset		Offset within memory region
- * @v priority		Priority within memory region
+ * @v name		Device name
+ * @v ops		VIA operations
  */
-void m6522_init ( M6522VIA *via, MemoryRegion *parent, hwaddr offset,
-		  unsigned int priority ) {
-	MemoryRegion *mr = g_new ( MemoryRegion, 1 );
+void m6522_init ( MemoryRegion *parent, hwaddr offset, const char *name,
+		  const M6522VIAOps *ops ) {
+	M6522VIA *via = g_new0 ( M6522VIA, 1 );
+
+	/* Initialise VIA */
+	via->name = name;
+	via->b.ops = &ops->b;
+	via->a.ops = &ops->a;
 
 	/* Register memory region */
-	memory_region_init_io ( mr, &m6522_ops, via, via->name,
-				M6522_VIA_SIZE );
-	memory_region_add_subregion_overlap ( parent, offset, mr, priority );
+	memory_region_init_io ( &via->mr, &m6522_ops, via, via->name,
+				M6522_SIZE );
+	memory_region_add_subregion ( parent, offset, &via->mr );
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, offset, &vmstate_m6522, via );

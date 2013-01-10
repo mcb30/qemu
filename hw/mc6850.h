@@ -1,5 +1,5 @@
 /*
- * Acorn BBC Micro
+ * Motorola 6850 virtual ACIA
  *
  * Copyright (C) 2013 Michael Brown <mbrown@fensystems.co.uk>
  *
@@ -17,36 +17,25 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef HW_BBC_H
-#define HW_BBC_H
+#ifndef HW_MC6850_H
+#define HW_MC6850_H
 
-#define BBC_B_RAM_BASE 0x0000
-#define BBC_B_RAM_SIZE 0x8000
+typedef struct MC6850ACIA MC6850ACIA;
 
-#define BBC_B_MOS_NAME "bbc/OS12.ROM"
-#define BBC_B_MOS_BASE 0xc000
-#define BBC_B_MOS_SIZE 0x4000
+/** A 6850 ACIA */
+struct MC6850ACIA {
+	/** Name */
+	const char *name;
+	/** Memory region */
+	MemoryRegion mr;
+	/** Character device */
+	CharDriverState *chr;
+};
 
-#define BBC_FRED_BASE 0xfc00
-#define BBC_FRED_SIZE 0x0100
+/** Size of memory region */
+#define MC6850_SIZE 16
 
-#define BBC_JIM_BASE 0xfd00
-#define BBC_JIM_SIZE 0x0100
-
-#define BBC_SHEILA_BASE 0xfe00
-#define BBC_SHEILA_SIZE 0x0100
-#define BBC_SHEILA_SERIAL 0x08
-#define BBC_SHEILA_SYSTEM_VIA 0x40
-#define BBC_SHEILA_USER_VIA 0x60
-
-/* Addressable latch */
-#define BBC_LATCH_SOUND_WE 0
-#define BBC_LATCH_SPEECH_RS 1
-#define BBC_LATCH_SPEECH_WS 2
-#define BBC_LATCH_KB_WE 3
-#define BBC_LATCH_C0 4
-#define BBC_LATCH_C1 5
-#define BBC_LATCH_CAPS_LOCK 6
-#define BBC_LATCH_SHIFT_LOCK 7
+extern void mc6850_init ( MemoryRegion *parent, hwaddr offset,
+			  const char *name, CharDriverState *chr );
 
 #endif
