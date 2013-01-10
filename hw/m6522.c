@@ -135,6 +135,20 @@ static const MemoryRegionOps m6522_ops = {
 	.write = m6522_write,
 };
 
+/** Virtual machine state description */
+static const VMStateDescription vmstate_m6522 = {
+	.name = "m6522",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_UINT8 ( b.or, M6522VIA ),
+		VMSTATE_UINT8 ( b.ddr, M6522VIA ),
+		VMSTATE_UINT8 ( a.or, M6522VIA ),
+		VMSTATE_UINT8 ( a.ddr, M6522VIA ),
+		VMSTATE_END_OF_LIST()
+	},
+};
+
 /**
  * Initialise 6522 VIA
  *
@@ -147,7 +161,11 @@ void m6522_init ( M6522VIA *via, MemoryRegion *parent, hwaddr offset,
 		  unsigned int priority ) {
 	MemoryRegion *mr = g_new ( MemoryRegion, 1 );
 
+	/* Register memory region */
 	memory_region_init_io ( mr, &m6522_ops, via, via->name,
 				M6522_VIA_SIZE );
 	memory_region_add_subregion_overlap ( parent, offset, mr, priority );
+
+	/* Register virtual machine state */
+	vmstate_register ( NULL, offset, &vmstate_m6522, via );
 }
