@@ -71,6 +71,7 @@ static uint64_t m6522_read ( void *opaque, hwaddr addr, unsigned int size ) {
 		LOG_M6522 ( "%s: IRB=0x%02x\n", via->name, data );
 		break;
 	case M6522_IRA:
+	case M6522_IRA_NO_HS:
 		data = ( via->a.input ? via->a.input ( via, &via->a ) : 0 );
 		LOG_M6522 ( "%s: IRA=0x%02x\n", via->name, data );
 		break;
@@ -109,6 +110,7 @@ static void m6522_write ( void *opaque, hwaddr addr, uint64_t data64,
 		m6522_output ( via, &via->b, data );
 		break;
 	case M6522_ORA:
+	case M6522_ORA_NO_HS:
 		LOG_M6522 ( "%s: ORA=0x%02x\n", via->name, data );
 		m6522_output ( via, &via->a, data );
 		break;

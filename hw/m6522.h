@@ -67,7 +67,8 @@ struct M6522VIA {
 #define M6522_IRA 0x1
 #define M6522_DDRB 0x2
 #define M6522_DDRA 0x3
-
+#define M6522_ORA_NO_HS 0xf
+#define M6522_IRA_NO_HS 0xf
 
 extern void m6522_init ( M6522VIA *via, MemoryRegion *parent, hwaddr offset,
 			 unsigned int priority );
