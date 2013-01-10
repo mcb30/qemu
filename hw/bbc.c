@@ -189,7 +189,7 @@ static void bbc_addressable_latch_write ( M6522VIA *via, M6522VIAPort *port,
 	qemu_log_mask ( CPU_LOG_IOPORT, "BBC: addressable latch now &%02X "
 			"(bit %d %s %s)\n", bbc.addressable_latch,
 			latch_address, names[latch_address],
-			( latch_data ? "set" : "unset" ) );
+			( latch_data ? "high" : "low" ) );
 
 	/* Handle write events */
 	switch ( latch_address ) {
