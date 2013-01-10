@@ -35,5 +35,12 @@
 
 #define BBC_SHEILA_BASE 0xfe00
 #define BBC_SHEILA_SIZE 0x0100
+#define BBC_SHEILA_SYSTEM_VIA 0x40
+
+/* Addressable latch */
+#define BBC_LATCH_SOUND_WE 0
+#define BBC_LATCH_KB_WE 3
+#define BBC_LATCH_CAPS_LOCK 6
+#define BBC_LATCH_SHIFT_LOCK 7
 
 #endif

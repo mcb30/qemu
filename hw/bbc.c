@@ -21,7 +21,9 @@
 #include "boards.h"
 #include "exec/address-spaces.h"
 #include "sysemu/sysemu.h"
+#include "ui/console.h"
 #include "loader.h"
+#include "m6522.h"
 #include "bbc.h"
 
 /**
@@ -132,6 +134,157 @@ static void bbc_init_jim ( void ) {
 					      jim, 1 );
 }
 
+/** Slow data bus */
+static uint8_t bbc_slow_data;
+
+/** Addressable latch */
+static uint8_t bbc_addressable_latch;
+
+/**
+ * Check if CAPS LOCK is enabled
+ *
+ * @ret caps_lock	CAPS LOCK is enabled
+ */
+static inline int bbc_caps_lock ( void ) {
+
+	return ( bbc_addressable_latch & ( 1 << BBC_LATCH_CAPS_LOCK ) );
+}
+
+/**
+ * Check if SHIFT LOCK is enabled
+ *
+ * @ret shift_lock	SHIFT LOCK is enabled
+ */
+static inline int bbc_shift_lock ( void ) {
+
+	return ( bbc_addressable_latch & ( 1 << BBC_LATCH_SHIFT_LOCK ) );
+}
+
+/**
+ * Update keyboard LEDs
+ *
+ */
+static void bbc_keyboard_leds ( void ) {
+	int ledstate;
+
+	/* Update LEDs based on control bits in addressable latch */
+	ledstate = ( ( bbc_caps_lock() ? QEMU_CAPS_LOCK_LED : 0 ) |
+		     ( bbc_shift_lock() ? QEMU_NUM_LOCK_LED : 0 ) );
+	kbd_put_ledstate ( ledstate );
+}
+
+/**
+ * Check if currently-selected key is pressed
+ *
+ * @ret pressed		Key is pressed
+ */
+static int bbc_keyboard_pressed ( void ) {
+	unsigned int row;
+	unsigned int column;
+
+	/* Calculate row (PA6:4) and column (PA3:0) addresses */
+	row = ( ( bbc_slow_data >> 4 ) & 0x07 );
+	column = ( ( bbc_slow_data >> 0 ) & 0x0f );
+
+	printf ( "Reading key (%d,%d)\n", column, row );
+
+	return 0;
+}
+
+/**
+ * Write to 76489 sound chip
+ *
+ * 
+ */
+static void bbc_sound_write ( void ) {
+
+	qemu_log_mask ( LOG_UNIMP, "BBC: unimplemented sound write &%02x\n",
+			bbc_slow_data );
+}
+
+/**
+ * Write to slow data bus (system VIA port A)
+ *
+ * @v via		6522 VIA
+ * @v port		Port
+ * @v data		Output data
+ */
+static void bbc_system_via_output_a ( M6522VIA *via, M6522VIAPort *port,
+				      uint8_t data ) {
+
+	/* Store data written to slow data bus */
+	bbc_slow_data = data;
+}
+
+/**
+ * Read from slow data bus (system VIA port A)
+ *
+ * @v via		6522 VIA
+ * @v port		Port
+ * @ret data		Input data
+ */
+static uint8_t bbc_system_via_input_a ( M6522VIA *via, M6522VIAPort *port ) {
+	uint8_t data;
+
+	/* Set data equal to outputs for all pins configured as outputs */
+	data = ( port->or & port->ddr );
+
+	//
+	printf ( "Reading from PA\n" );
+
+	/* Read from keyboard into PA7 if keyboard is enabled */
+	if ( ! ( bbc_addressable_latch & ( 1 << BBC_LATCH_KB_WE ) ) ) {
+		data &= ( 1 << 7 );
+		if ( bbc_keyboard_pressed() )
+			data |= ( 1 << 7 );
+	}
+
+	return data;
+}
+
+/**
+ * Write to addressable latch (system VIA port B)
+ *
+ * @v via		6522 VIA
+ * @v port		Port
+ * @v data		Output data
+ */
+static void bbc_system_via_output_b ( M6522VIA *via, M6522VIAPort *port,
+				      uint8_t data ) {
+	unsigned int latch_address;
+	unsigned int latch_data;
+
+	/* Update addressable latch stored value */
+	latch_address = ( ( data >> 0 ) & 0x07 );
+	latch_data = ( ( data >> 3 ) & 0x01 );
+	bbc_addressable_latch &= ~( 1 << latch_address );
+	bbc_addressable_latch |= ( latch_data << latch_address );
+
+	/* Handle write events */
+	switch ( latch_address ) {
+	case BBC_LATCH_SOUND_WE:
+		if ( ! latch_data )
+			bbc_sound_write();
+		break;
+	case BBC_LATCH_CAPS_LOCK:
+	case BBC_LATCH_SHIFT_LOCK:
+		bbc_keyboard_leds();
+		break;
+	}
+}
+
+/** System VIA */
+static M6522VIA bbc_system_via = {
+	.name = "bbc.sheila.system_via",
+	.b = {
+		.output = bbc_system_via_output_b,
+	},
+	.a = {
+		.output = bbc_system_via_output_a,
+		.input = bbc_system_via_input_a,
+	},
+};
+
 /**
  * Initialise SHEILA
  *
@@ -145,6 +298,9 @@ static void bbc_init_sheila ( void ) {
 				BBC_SHEILA_SIZE );
 	memory_region_add_subregion_overlap ( address_space_mem,
 					      BBC_SHEILA_BASE, sheila, 1 );
+
+	m6522_init ( &bbc_system_via, address_space_mem,
+		     ( BBC_SHEILA_BASE + BBC_SHEILA_SYSTEM_VIA ), 2 );
 }
 
 /**
