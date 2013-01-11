@@ -176,9 +176,6 @@ static void m6502_irq ( CPUM6502State *env, uint16_t vector ) {
 
 void m6502_interrupt ( CPUM6502State *env ) {
 
-	//
-	return;
-
 	switch ( env->exception_index ) {
 	case EXCP_IRQ:
 		qemu_log_mask ( CPU_LOG_INT, "IRQ at &%04X\n", env->pc );

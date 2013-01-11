@@ -115,7 +115,7 @@ unsigned int m6502_get_p ( CPUM6502State *env ) {
 void m6502_set_p ( CPUM6502State *env, unsigned int p ) {
 
 	env->p_c = ( ( p >> P_C ) & 1 );
-	env->p_nz = ~( p & ( 1 << P_Z ) );
+	env->p_nz = ( ~p & ( 1 << P_Z ) );
 	env->p_i = ( ( p >> P_I ) & 1 );
 	env->p_d = ( ( p >> P_D ) & 1 );
 	env->p_b = ( ( p >> P_B ) & 1 );
