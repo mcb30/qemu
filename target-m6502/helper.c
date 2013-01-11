@@ -120,12 +120,10 @@ void m6502_dump_state ( CPUM6502State *env, FILE *f, fprintf_function fprintf,
 
 	/* Dump state */
 	fprintf ( f, "PC=&%04X A=&%02X X=&%02X Y=&%02X S=&%04X "
-		  "P=&%02X(%c%c%c%c%c%c%c%c)\n", env->pc, env->a, env->x,
+		  "P=&%02X(%c%c%c%c%c%c)\n", env->pc, env->a, env->x,
 		  env->y, ( M6502_STACK_BASE + env->s ), m6502_get_p ( env ),
 		  ( env->p_n ? 'N' : 'n' ),
 		  ( env->p_v ? 'V' : 'v' ),
-		  ( env->p_u ? 'U' : 'u' ),
-		  ( env->p_b ? 'B' : 'b' ),
 		  ( env->p_d ? 'D' : 'd' ),
 		  ( env->p_i ? 'I' : 'i' ),
 		  ( ( ! env->p_nz ) ? 'Z' : 'z' ),
@@ -162,10 +160,10 @@ static void m6502_irq ( CPUM6502State *env, uint16_t vector ) {
 	uint16_t stack;
 
 	/* Push program counter and status register onto stack */
-	env->s = ( ( env->s - 0x03 ) & 0xff );
 	stack = ( M6502_STACK_BASE + env->s );
-	cpu_stw_data ( env, ( stack + 1 ), env->pc );
-	cpu_stb_data ( env, ( stack + 0 ), m6502_get_p ( env ) );
+	cpu_stw_data ( env, ( stack - 1 ), env->pc );
+	cpu_stb_data ( env, ( stack - 2 ), m6502_get_p ( env ) );
+	env->s = ( ( env->s - 0x03 ) & 0xff );
 
 	/* Disable interrupts */
 	env->p_i = 1;

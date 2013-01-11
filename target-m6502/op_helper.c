@@ -46,7 +46,7 @@ void helper_exception ( CPUM6502State *env, uint32_t index ) {
 }
 
 void helper_dump_state ( CPUM6502State *env ) {
-	m6502_dump_state ( env, stderr, fprintf, 0 );
+	log_cpu_state ( env, 0 );
 }
 
 void helper_dump_stack ( CPUM6502State *env ) {

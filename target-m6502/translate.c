@@ -45,8 +45,6 @@ static M6502Register cpu_p_c = { .name = "C" };
 static M6502Register cpu_p_nz = { .name = "Z" };
 static M6502Register cpu_p_i = { .name = "I" };
 static M6502Register cpu_p_d = { .name = "D" };
-static M6502Register cpu_p_b = { .name = "B" };
-static M6502Register cpu_p_u = { .name = "U" };
 static M6502Register cpu_p_v = { .name = "V" };
 static M6502Register cpu_p_n = { .name = "N" };
 static M6502Register cpu_s = { .name = "S" };
@@ -84,12 +82,31 @@ struct DisasContext {
 	unsigned int offset;
 };
 
+/**
+ * Generate CPU state dump (for debugging)
+ *
+ * @v mask		Log level mask
+ * @v pc		Program counter
+ */
+static inline void gen_helper_dump_state_mask ( int mask, uint16_t pc ) {
+
+	if ( qemu_loglevel_mask ( mask ) ) {
+		tcg_gen_movi_i32 ( cpu_pc, pc );
+		gen_helper_dump_state ( cpu_env );
+	}
+}
+
 /******************************************************************************
  *
  * Status register assembly/disassembly
  *
  * See comments in CPUM6502State for an explanation of why the flags
  * are stored this way.
+ *
+ * Note that the break flag "B" doesn't actually exist as a register
+ * within the CPU; it's a virtual flag that appears only within the
+ * copy of the status register created on the stack by the BRK
+ * instruction.
  */
 
 /**
@@ -102,7 +119,6 @@ unsigned int m6502_get_p ( CPUM6502State *env ) {
 
 	return ( ( env->p_c << P_C ) | ( ( ! env->p_nz ) << P_Z ) |
 		 ( env->p_i << P_I ) | ( env->p_d << P_D ) |
-		 ( env->p_b << P_B ) | ( env->p_u << P_U ) |
 		 ( ( !! env->p_v ) << P_V ) | env->p_n );
 }
 
@@ -118,8 +134,6 @@ void m6502_set_p ( CPUM6502State *env, unsigned int p ) {
 	env->p_nz = ( ~p & ( 1 << P_Z ) );
 	env->p_i = ( ( p >> P_I ) & 1 );
 	env->p_d = ( ( p >> P_D ) & 1 );
-	env->p_b = ( ( p >> P_B ) & 1 );
-	env->p_u = ( ( p >> P_U ) & 1 );
 	env->p_v = ( p & ( 1 << P_V ) );
 	env->p_n = ( p & ( 1 << P_N ) );
 }
@@ -1141,10 +1155,9 @@ static void m6502_gen_break ( DisasContext *dc ) {
 	TCGv_i32 retaddr;
 	TCGv_i32 vector;
 
-	/* Set break flag */
-	tcg_gen_movi_i32 ( cpu_p_b.var, 1 );
-
-	/* Store return address and status register on stack */
+	/* Store return address and status register (with B bit set)
+	 * on stack.
+	 */
 	stack = tcg_temp_new_i32();
 	retaddr = tcg_const_i32 ( dc->pc + 2 );
 	cpu_p.var = tcg_temp_new_i32();
@@ -1152,6 +1165,7 @@ static void m6502_gen_break ( DisasContext *dc ) {
 	tcg_gen_qemu_st16 ( retaddr, stack, MEM_INDEX );
 	tcg_gen_addi_i32 ( stack, cpu_s.var, M6502_STACK_BASE - 2 );
 	gen_helper_get_p ( cpu_p.var, cpu_env );
+	tcg_gen_ori_i32 ( cpu_p.var, cpu_p.var, ( 1 << P_B ) );
 	tcg_gen_qemu_st8 ( cpu_p.var, stack, MEM_INDEX );
 	tcg_temp_free_i32 ( cpu_p.var );
 	tcg_temp_free_i32 ( retaddr );
@@ -1667,12 +1681,6 @@ void m6502_translate_init ( void ) {
 	cpu_p_d.var = tcg_global_mem_new ( TCG_AREG0,
 					   offsetof ( CPUM6502State, p_d ),
 					   "p.d" );
-	cpu_p_b.var = tcg_global_mem_new ( TCG_AREG0,
-					   offsetof ( CPUM6502State, p_b ),
-					   "p.b" );
-	cpu_p_u.var = tcg_global_mem_new ( TCG_AREG0,
-					   offsetof ( CPUM6502State, p_u ),
-					   "p.u" );
 	cpu_p_v.var = tcg_global_mem_new ( TCG_AREG0,
 					   offsetof ( CPUM6502State, p_v ),
 					   "p.v" );

@@ -105,16 +105,6 @@ typedef struct CPUM6502State {
 	 * Valid values are zero and one.
 	 */
 	uint32_t p_d;
-	/** Break flag
-	 *
-	 * Valid values are zero and one.
-	 */
-	uint32_t p_b;
-	/** Unused flag
-	 *
-	 * Valid values are zero and one.
-	 */
-	uint32_t p_u;
 	/** Overflow flag
 	 *
 	 * Overflow flag is set iff this value is non-zero.  Defining
