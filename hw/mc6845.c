@@ -21,7 +21,7 @@
 #include "boards.h"
 #include "exec/address-spaces.h"
 #include "mc6845.h"
-#define DEBUG_MC6850 1
+#define DEBUG_MC6845 1
 
 /* Debug messages */
 #define LOG_MC6845(...) do {						\
@@ -42,11 +42,27 @@ static uint64_t mc6845_read ( void *opaque, hwaddr addr, unsigned int size ) {
 	MC6845CRTC *crtc = opaque;
 	uint8_t data;
 
-	/* Read from specified register */
-	switch ( addr & ( MC6845_SIZE - 1 ) ) {
+	/* Ignore reads from the write-only address register */
+	if ( ( addr & ( MC6845_SIZE - 1 ) ) == MC6845_ADDRESS )
+		return 0;
+
+	/* Read from specified register.  Most registers are write-only */
+	switch ( crtc->address ) {
+	case MC6845_CURSOR_H:
+		data = ( ( crtc->cursor >> 0 ) & 0xff );
+		break;
+	case MC6845_CURSOR_L:
+		data = ( ( crtc->cursor >> 8 ) & 0xff );
+		break;
+	case MC6845_PEN_H:
+		data = ( ( crtc->pen >> 0 ) & 0xff );
+		break;
+	case MC6845_PEN_L:
+		data = ( ( crtc->pen >> 8 ) & 0xff );
+		break;
 	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from "
-				"0x%02lx\n", crtc->name, addr );
+				"reg 0x%02x\n", crtc->name, crtc->address );
 		data = 0;
 		break;
 	}
@@ -66,13 +82,103 @@ static void mc6845_write ( void *opaque, hwaddr addr, uint64_t data64,
 	MC6845CRTC *crtc = opaque;
 	uint8_t data = data64;
 
-	/* Write to specified register */
-	switch ( addr & ( MC6845_SIZE - 1 ) ) {
+	/* Handle writes to address register */
+	if ( ( addr & ( MC6845_SIZE - 1 ) ) == MC6845_ADDRESS ) {
+		crtc->address = ( data & MC6845_ADDRESS_MASK );
+		return;
+	}
+
+	/* Handle writes to data register */
+	switch ( crtc->address ) {
+	case MC6845_HORIZ_TOTAL:
+		crtc->horiz_total = data;
+		break;
+	case MC6845_HORIZ_DISPLAYED:
+		crtc->horiz_displayed = data;
+		break;
+	case MC6845_HORIZ_SYNC_POS:
+		crtc->horiz_sync_pos = data;
+		break;
+	case MC6845_HORIZ_SYNC_WIDTH:
+		crtc->horiz_sync_width = ( ( data >> 0 ) & 0x0f );
+		crtc->vert_sync_width = ( ( data >> 4 ) & 0x0f );
+		break;
+	case MC6845_VERT_TOTAL:
+		crtc->vert_total = ( data & 0x7f );
+		break;
+	case MC6845_VERT_ADJUST:
+		crtc->vert_adjust = ( data & 0x1f );
+		break;
+	case MC6845_VERT_DISPLAYED:
+		crtc->vert_displayed = ( data & 0x7f );
+		break;
+	case MC6845_VERT_SYNC_POS:
+		crtc->vert_sync_pos = ( data & 0x7f );
+		break;
+	case MC6845_INTERLACE:
+		crtc->interlace = ( ( data >> 0 ) & 0x01 );
+		crtc->interlace_video = ( ( data >> 1 ) & 0x01 );
+		crtc->display_delay = ( ( data >> 4 ) & 0x03 );
+		crtc->display_disabled = ( crtc->display_delay == 0x03 );
+		crtc->cursor_delay = ( ( data >> 6 ) & 0x03 );
+		crtc->cursor_disabled = ( crtc->cursor_delay == 0x03 );
+		break;
+	case MC6845_MAX_SCAN_LINE:
+		crtc->max_scan_line = ( data & 0x1f );
+		break;
+	case MC6845_CURSOR_START:
+		crtc->cursor_blink = ( ( data >> 6 ) & 0x01 );
+		crtc->cursor_blink_slow = ( ( data >> 5 ) & 0x01 );
+		crtc->cursor_start = ( ( data >> 0 ) & 0x1f );
+		break;
+	case MC6845_CURSOR_END:
+		crtc->cursor_end = ( data & 0x1f );
+		break;
+	case MC6845_START_H:
+		crtc->start &= ~0xff00;
+		crtc->start |= ( ( data & 0x3f ) << 8 );
+		break;
+	case MC6845_START_L:
+		crtc->start &= ~0x00ff;
+		crtc->start |= data;
+		break;
+	case MC6845_CURSOR_H:
+		crtc->cursor &= ~0xff00;
+		crtc->cursor |= ( ( data & 0x3f ) << 8 );
+		break;
+	case MC6845_CURSOR_L:
+		crtc->cursor &= ~0x00ff;
+		crtc->cursor |= data;
+		break;
 	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to "
-				"0x%02lx\n", crtc->name, data, addr );
+				"reg 0x%02x\n", crtc->name, data,
+				crtc->address );
 		break;
 	}
+	LOG_MC6845 ( "%s: %dx%d of %dx(%d+%d/%d) hsync %d+%d vsync %d+%d"
+		     "%s%s delay %d%s\n", crtc->name,
+		     crtc->horiz_displayed, crtc->vert_displayed,
+		     crtc->horiz_total, crtc->vert_total, crtc->vert_adjust,
+		     ( crtc->max_scan_line + 1 ),
+		     crtc->horiz_sync_pos, crtc->horiz_sync_width,
+		     crtc->vert_sync_pos, crtc->vert_sync_width,
+		     ( crtc->interlace ? " int.sync" : "" ),
+		     ( ( crtc->interlace && crtc->interlace_video ) ?
+		       "+video" : "" ),
+		     crtc->display_delay,
+		     ( crtc->display_disabled ? " disabled" : "" ) );
+	LOG_MC6845 ( "%s: start 0x%04x cursor 0x%04x=(%d,%d) shape %d-%d%s%s"
+		     " delay %d%s\n",
+		     crtc->name, crtc->start, crtc->cursor,
+		     mc6845_cursor_horiz ( crtc ), mc6845_cursor_vert ( crtc ),
+		     crtc->cursor_start, crtc->cursor_end,
+		     ( crtc->cursor_blink ? " blink" : "" ),
+		     ( crtc->cursor_blink ?
+		       ( crtc->cursor_blink_slow ? " slow" : " fast" ) : "" ),
+		     crtc->cursor_delay,
+		     ( crtc->cursor_disabled ? " disabled" : "" ) );
+
 }
 
 /** 6845 CRTC operations */
@@ -87,6 +193,30 @@ static const VMStateDescription vmstate_mc6845 = {
 	.version_id = 1,
 	.minimum_version_id = 1,
 	.fields = ( VMStateField[] ) {
+		VMSTATE_UINT8 ( address, MC6845CRTC ),
+		VMSTATE_UINT8 ( horiz_total, MC6845CRTC ),
+		VMSTATE_UINT8 ( horiz_displayed, MC6845CRTC ),
+		VMSTATE_UINT8 ( horiz_sync_pos, MC6845CRTC ),
+		VMSTATE_UINT8 ( horiz_sync_width, MC6845CRTC ),
+		VMSTATE_UINT8 ( vert_total, MC6845CRTC ),
+		VMSTATE_UINT8 ( vert_adjust, MC6845CRTC ),
+		VMSTATE_UINT8 ( vert_displayed, MC6845CRTC ),
+		VMSTATE_UINT8 ( vert_sync_pos, MC6845CRTC ),
+		VMSTATE_UINT8 ( vert_sync_width, MC6845CRTC ),
+		VMSTATE_UINT8 ( interlace, MC6845CRTC ),
+		VMSTATE_UINT8 ( interlace_video, MC6845CRTC ),
+		VMSTATE_UINT8 ( display_delay, MC6845CRTC ),
+		VMSTATE_UINT8 ( display_disabled, MC6845CRTC ),
+		VMSTATE_UINT8 ( cursor_delay, MC6845CRTC ),
+		VMSTATE_UINT8 ( cursor_disabled, MC6845CRTC ),
+		VMSTATE_UINT8 ( max_scan_line, MC6845CRTC ),
+		VMSTATE_UINT8 ( cursor_blink, MC6845CRTC ),
+		VMSTATE_UINT8 ( cursor_blink_slow, MC6845CRTC ),
+		VMSTATE_UINT8 ( cursor_start, MC6845CRTC ),
+		VMSTATE_UINT8 ( cursor_end, MC6845CRTC ),
+		VMSTATE_UINT16 ( start, MC6845CRTC ),
+		VMSTATE_UINT16 ( cursor, MC6845CRTC ),
+		VMSTATE_UINT16 ( pen, MC6845CRTC ),
 		VMSTATE_END_OF_LIST()
 	},
 };
