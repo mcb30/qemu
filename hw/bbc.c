@@ -23,8 +23,9 @@
 #include "sysemu/sysemu.h"
 #include "ui/console.h"
 #include "loader.h"
-#include "m6522.h"
+#include "mc6845.h"
 #include "mc6850.h"
+#include "m6522.h"
 #include "bbc.h"
 
 /******************************************************************************
@@ -159,16 +160,17 @@ static const MemoryRegionOps bbc_paged_rom_select_ops = {
  * Initialise paged ROM select register
  *
  * @v parent		Parent memory region
- * @v offset		Offset within memory region
+ * @v offset		Offset within parent memory region
+ * @v size		Size of memory region
  * @v name		Device name
  */
 static void bbc_paged_rom_select_init ( MemoryRegion *parent, hwaddr offset,
-					const char *name ) {
+					hwaddr size, const char *name ) {
 	MemoryRegion *mr = g_new ( MemoryRegion, 1 );
 
 	/* Register memory region */
 	memory_region_init_io ( mr, &bbc_paged_rom_select_ops, NULL, name,
-				BBC_PAGED_ROM_SELECT_SIZE );
+				size );
 	memory_region_add_subregion ( parent, offset, mr );
 }
 
@@ -452,17 +454,25 @@ static void bbc_init_sheila ( void ) {
 	memory_region_add_subregion_overlap ( address_space_mem,
 					      BBC_SHEILA_BASE, sheila, 1 );
 
+	/* Initialise CRTC */
+	mc6845_init ( sheila, BBC_SHEILA_CRTC_BASE, BBC_SHEILA_CRTC_SIZE,
+		      "bbc.crtc" );
+
 	/* Initialise serial system */
-	mc6850_init ( sheila, BBC_SHEILA_SERIAL, "bbc.serial", serial_hds[0] );
+	mc6850_init ( sheila, BBC_SHEILA_ACIA_BASE, BBC_SHEILA_ACIA_SIZE,
+		      "bbc.acia", serial_hds[0] );
 
 	/* Initialise paged ROM select register */
-	bbc_paged_rom_select_init ( sheila, BBC_SHEILA_PAGED_ROM_SELECT,
+	bbc_paged_rom_select_init ( sheila, BBC_SHEILA_PAGED_ROM_SELECT_BASE,
+				    BBC_SHEILA_PAGED_ROM_SELECT_SIZE,
 				    "bbc.paged_rom_select" );
 
 	/* Initialise system and user VIAs */
-	m6522_init ( sheila, BBC_SHEILA_SYSTEM_VIA, "bbc.system_via",
+	m6522_init ( sheila, BBC_SHEILA_SYSTEM_VIA_BASE,
+		     BBC_SHEILA_SYSTEM_VIA_SIZE, "bbc.system_via",
 		     &bbc_system_via_ops, bbc_irq );
-	m6522_init ( sheila, BBC_SHEILA_USER_VIA, "bbc.user_via",
+	m6522_init ( sheila, BBC_SHEILA_USER_VIA_BASE,
+		     BBC_SHEILA_USER_VIA_SIZE, "bbc.user_via",
 		     &bbc_user_via_ops, bbc_irq );
 }
 
@@ -547,7 +557,10 @@ static void bbc_load_paged_roms ( const char *basic_filename ) {
 	const char *filename;
 	const char *name;
 
-	/* Initialise paged ROM virtual memory region */
+	/* Initialise paged ROM virtual memory region.  There is no
+	 * way for the CPU to access this region directly, but it
+	 * gives us an address to pass to load_image_targphys().
+	 */
 	memory_region_init ( roms, "bbc.roms",
 			     ( BBC_PAGED_ROM_COUNT * BBC_PAGED_ROM_SIZE ) );
 	memory_region_set_readonly ( roms, true );

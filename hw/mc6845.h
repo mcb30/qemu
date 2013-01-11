@@ -1,5 +1,5 @@
 /*
- * Motorola 6850 virtual ACIA
+ * Motorola 6845 virtual CRTC
  *
  * Copyright (C) 2013 Michael Brown <mbrown@fensystems.co.uk>
  *
@@ -17,25 +17,23 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef HW_MC6850_H
-#define HW_MC6850_H
+#ifndef HW_MC6845_H
+#define HW_MC6845_H
 
-typedef struct MC6850ACIA MC6850ACIA;
+typedef struct MC6845CRTC MC6845CRTC;
 
-/** A 6850 ACIA */
-struct MC6850ACIA {
+/** A 6845 CRTC */
+struct MC6845CRTC {
 	/** Name */
 	const char *name;
 	/** Memory region */
 	MemoryRegion mr;
-	/** Character device */
-	CharDriverState *chr;
 };
 
 /** Size of memory region */
-#define MC6850_SIZE 0x08
+#define MC6845_SIZE 0x02
 
-extern void mc6850_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
-			  const char *name, CharDriverState *chr );
+extern void mc6845_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
+			  const char *name );
 
 #endif

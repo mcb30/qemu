@@ -369,6 +369,9 @@ static void m6522_timer_start ( M6522VIA *via, M6522VIATimer *timer ) {
 	timer->c &= ~0xff;
 	timer->c |= ( timer->l & 0xff );
 
+	//
+	m6522_set_interrupts ( via, M6522_INT_T1 );
+
 	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented timer start 0x%04x\n",
 			via->name, timer->c );
 }
@@ -676,7 +679,7 @@ static void m6522_sr_write ( M6522VIA *via, uint8_t data ) {
  * @ret data		Read data
  */
 static uint64_t m6522_read ( void *opaque, hwaddr addr, unsigned int size ) {
-	static const M6522VIARegRead read[M6522_SIZE] = {
+	static const M6522VIARegRead read_ops[M6522_SIZE] = {
 		[M6522_IRB] = m6522_irb_read,
 		[M6522_IRA] = m6522_ira_read,
 		[M6522_DDRB] = m6522_ddrb_read,
@@ -693,10 +696,12 @@ static uint64_t m6522_read ( void *opaque, hwaddr addr, unsigned int size ) {
 		[M6522_IRA_NO_HS] = m6522_ira_no_hs_read,
 	};
 	M6522VIA *via = opaque;
+	M6522VIARegRead read;
 
 	/* Read from specified register */
-	if ( read[addr] ) {
-		return read[addr] ( via );
+	read = read_ops[ addr & ( M6522_SIZE - 1 ) ];
+	if ( read ) {
+		return read ( via );
 	} else {
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from "
 				"0x%02lx\n", via->name, addr );
@@ -714,7 +719,7 @@ static uint64_t m6522_read ( void *opaque, hwaddr addr, unsigned int size ) {
  */
 static void m6522_write ( void *opaque, hwaddr addr, uint64_t data64,
 			  unsigned int size ) {
-	static const M6522VIARegWrite write[M6522_SIZE] = {
+	static const M6522VIARegWrite write_ops[M6522_SIZE] = {
 		[M6522_ORB] = m6522_orb_write,
 		[M6522_ORA] = m6522_ora_write,
 		[M6522_DDRB] = m6522_ddrb_write,
@@ -732,10 +737,12 @@ static void m6522_write ( void *opaque, hwaddr addr, uint64_t data64,
 	};
 	M6522VIA *via = opaque;
 	uint8_t data = data64;
+	M6522VIARegWrite write;
 
 	/* Write to specified register */
-	if ( write[addr] ) {
-		write[addr] ( via, data );
+	write = write_ops[ addr & ( M6522_SIZE - 1 ) ];
+	if ( write ) {
+		write ( via, data );
 	} else {
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to "
 				"0x%02lx\n", via->name, data, addr );
@@ -775,13 +782,14 @@ static const VMStateDescription vmstate_m6522 = {
  * Initialise 6522 VIA
  *
  * @v parent		Parent memory region
- * @v offset		Offset within memory region
+ * @v offset		Offset within parent memory region
+ * @v size		Size of memory region
  * @v name		Device name
  * @v ops		VIA operations
  * @v irq		Interrupt request line
  */
-void m6522_init ( MemoryRegion *parent, hwaddr offset, const char *name,
-		  const M6522VIAOps *ops, qemu_irq irq ) {
+void m6522_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
+		  const char *name, const M6522VIAOps *ops, qemu_irq irq ) {
 	M6522VIA *via = g_new0 ( M6522VIA, 1 );
 
 	/* Initialise VIA */
@@ -791,8 +799,7 @@ void m6522_init ( MemoryRegion *parent, hwaddr offset, const char *name,
 	via->irq = irq;
 
 	/* Register memory region */
-	memory_region_init_io ( &via->mr, &m6522_ops, via, via->name,
-				M6522_SIZE );
+	memory_region_init_io ( &via->mr, &m6522_ops, via, via->name, size );
 	memory_region_add_subregion ( parent, offset, &via->mr );
 
 	/* Register virtual machine state */
