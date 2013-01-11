@@ -37,6 +37,8 @@
 typedef struct {
 	/** Addressable latch */
 	uint8_t addressable_latch;
+	/** Paged ROM select register */
+	uint8_t paged_rom;
 } BBCState;
 
 /** System state description */
@@ -46,6 +48,7 @@ static const VMStateDescription vmstate_bbc = {
 	.minimum_version_id = 1,
 	.fields = ( VMStateField[] ) {
 		VMSTATE_UINT8 ( addressable_latch, BBCState ),
+		VMSTATE_UINT8 ( paged_rom, BBCState ),
 		VMSTATE_END_OF_LIST()
 	},
 };
@@ -102,6 +105,71 @@ static void bbc_init_interrupts ( void ) {
 	/* Allocate IRQ and NMI interrupts */
 	bbc_irq = qemu_allocate_irqs ( bbc_irq_handler, NULL, 1 )[0];
 	bbc_nmi = qemu_allocate_irqs ( bbc_nmi_handler, NULL, 1 )[0];
+}
+
+/******************************************************************************
+ *
+ * Paged ROMs
+ *
+ */
+
+/** Paged ROM memory region */
+static MemoryRegion bbc_paged_rom_mr;
+
+/**
+ * Read from paged ROM select register
+ *
+ * @v opaque		Opaque pointer
+ * @v addr		Register address
+ * @v size		Size of read
+ * @ret data		Read data
+ */
+static uint64_t bbc_paged_rom_select_read ( void *opaque, hwaddr addr,
+					    unsigned int size ) {
+
+	/* This is a write-only register */
+	return 0;
+}
+
+/**
+ * Write to paged ROM select register
+ *
+ * @v opaque		Opaque pointer
+ * @v addr		Register address
+ * @v data64		Data to write
+ * @v size		Size of write
+ */
+static void bbc_paged_rom_select_write ( void *opaque, hwaddr addr,
+					 uint64_t data, unsigned int size ) {
+	unsigned int page;
+
+	/* Change offset address into paged ROM virtual memory region */
+	page = ( data & ( BBC_PAGED_ROM_COUNT - 1 ) );
+	memory_region_set_alias_offset ( &bbc_paged_rom_mr,
+					 ( page * BBC_PAGED_ROM_SIZE ) );
+}
+
+/** Paged ROM select register operations */
+static const MemoryRegionOps bbc_paged_rom_select_ops = {
+	.read = bbc_paged_rom_select_read,
+	.write = bbc_paged_rom_select_write,
+};
+
+/**
+ * Initialise paged ROM select register
+ *
+ * @v parent		Parent memory region
+ * @v offset		Offset within memory region
+ * @v name		Device name
+ */
+static void bbc_paged_rom_select_init ( MemoryRegion *parent, hwaddr offset,
+					const char *name ) {
+	MemoryRegion *mr = g_new ( MemoryRegion, 1 );
+
+	/* Register memory region */
+	memory_region_init_io ( mr, &bbc_paged_rom_select_ops, NULL, name,
+				BBC_PAGED_ROM_SELECT_SIZE );
+	memory_region_add_subregion ( parent, offset, mr );
 }
 
 /******************************************************************************
@@ -387,6 +455,10 @@ static void bbc_init_sheila ( void ) {
 	/* Initialise serial system */
 	mc6850_init ( sheila, BBC_SHEILA_SERIAL, "bbc.serial", serial_hds[0] );
 
+	/* Initialise paged ROM select register */
+	bbc_paged_rom_select_init ( sheila, BBC_SHEILA_PAGED_ROM_SELECT,
+				    "bbc.paged_rom_select" );
+
 	/* Initialise system and user VIAs */
 	m6522_init ( sheila, BBC_SHEILA_SYSTEM_VIA, "bbc.system_via",
 		     &bbc_system_via_ops, bbc_irq );
@@ -401,41 +473,106 @@ static void bbc_init_sheila ( void ) {
  */
 
 /**
- * Load MOS ROM
+ * Load ROM
  *
- * @v default_bios_name	Default MOS name to use if none specified
- * @v base		Base address
- * @v expected_size	Expected size of MOS ROM
+ * @v parent		Parent memory region
+ * @v name		Name of memory region
+ * @v filename		Filename
+ * @v base		Base address within memory region
+ * @v targphys		Base address within system memory
+ * @v max_size		Maximum allowed size of ROM
  */
-static void bbc_load_mos ( const char *default_bios_name, hwaddr base,
-			   int expected_size ) {
-	MemoryRegion *address_space_mem = get_system_memory();
-	MemoryRegion *mos = g_new ( MemoryRegion, 1 );
-	const char *filename;
+static void bbc_load_rom ( MemoryRegion *parent, const char *name,
+			   const char *filename, hwaddr base, hwaddr targphys,
+			   int max_size ) {
+	MemoryRegion *rom = g_new ( MemoryRegion, 1 );
+	const char *actual_filename;
 	int size;
 
 	/* Initialise memory region */
-	memory_region_init_ram ( mos, "bbc.mos", expected_size );
-	vmstate_register_ram_global ( mos );
-	memory_region_set_readonly ( mos, true );
-	memory_region_add_subregion ( address_space_mem, base, mos );
+	memory_region_init_ram ( rom, name, max_size );
+	vmstate_register_ram_global ( rom );
+	memory_region_set_readonly ( rom, true );
+	memory_region_add_subregion ( parent, base, rom );
 
-	/* Locate MOS file */
-	if ( bios_name == NULL )
-		bios_name = default_bios_name;
-	filename = qemu_find_file ( QEMU_FILE_TYPE_BIOS, bios_name );
-	if ( ! filename ) {
-		fprintf ( stderr, "qemu: could not find MOS '%s'\n",
-			  bios_name );
+	/* Locate ROM file */
+	actual_filename = qemu_find_file ( QEMU_FILE_TYPE_BIOS, filename );
+	if ( ! actual_filename ) {
+		fprintf ( stderr, "qemu: could not find ROM '%s'\n",
+			  filename );
 		exit ( 1 );
 	}
 
 	/* Check size */
-	size = load_image_targphys ( filename, base, expected_size );
-	if ( size != expected_size ) {
-		fprintf ( stderr, "qemu: could not load (or bad size) MOS "
-			  "'%s'\n", filename );
+	size = load_image_targphys ( actual_filename, targphys, max_size );
+	if ( size < 0 ) {
+		fprintf ( stderr, "qemu: could not load (or bad size) ROM "
+			  "'%s'\n", actual_filename );
 		exit ( 1 );
+	}
+}
+
+/**
+ * Load MOS ROM
+ *
+ * @v default_filename	Default filename to use if none specified
+ * @v base		Base address
+ * @v max_size		Maximum allowed size of ROM
+ */
+static void bbc_load_mos ( const char *default_filename, hwaddr base,
+			   int max_size ) {
+	MemoryRegion *address_space_mem = get_system_memory();
+	const char *name;
+
+	/* Use default filename if no 'BIOS' name is specified */
+	if ( bios_name == NULL )
+		bios_name = default_filename;
+
+	/* Load MOS ROM */
+	name = g_strdup_printf ( "bbc.mos %s", bios_name );
+	bbc_load_rom ( address_space_mem, name, bios_name, base, base,
+		       max_size );
+}
+
+/**
+ * Load paged ROMs
+ *
+ * @v basic_filename	Filename for BASIC ROM (always loaded)
+ */
+static void bbc_load_paged_roms ( const char *basic_filename ) {
+	MemoryRegion *address_space_mem = get_system_memory();
+	MemoryRegion *roms = g_new ( MemoryRegion, 1 );
+	unsigned int i;
+	unsigned int page;
+	const char *filename;
+	const char *name;
+
+	/* Initialise paged ROM virtual memory region */
+	memory_region_init ( roms, "bbc.roms",
+			     ( BBC_PAGED_ROM_COUNT * BBC_PAGED_ROM_SIZE ) );
+	memory_region_set_readonly ( roms, true );
+	memory_region_add_subregion ( address_space_mem,
+				      BBC_PAGED_ROM_VIRTUAL_BASE, roms );
+
+	/* Initialise paged ROM memory region */
+	memory_region_init_alias ( &bbc_paged_rom_mr, "bbc.paged_rom", roms,
+				   0, BBC_PAGED_ROM_SIZE );
+	memory_region_set_readonly ( &bbc_paged_rom_mr, true );
+	memory_region_add_subregion ( address_space_mem, BBC_PAGED_ROM_BASE,
+				      &bbc_paged_rom_mr );
+
+	/* Load any specified option ROMs plus the BASIC ROM */
+	for ( i = 0 ; ( ( i < BBC_PAGED_ROM_COUNT ) &&
+			( i < ( nb_option_roms + 1 ) ) ) ; i++ ) {
+		page = ( BBC_PAGED_ROM_COUNT - i - 1 );
+		filename = ( ( i == nb_option_roms ) ? basic_filename :
+			     option_rom[0].name );
+		name = g_strdup_printf ( "bbc.rom%d %s", page, filename );
+		bbc_load_rom ( roms, name, filename,
+			       ( page * BBC_PAGED_ROM_SIZE ),
+			       ( BBC_PAGED_ROM_VIRTUAL_BASE +
+				 ( page * BBC_PAGED_ROM_SIZE ) ),
+			       BBC_PAGED_ROM_SIZE );
 	}
 }
 
@@ -455,8 +592,9 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 	vmstate_register_ram_global ( ram );
 	memory_region_add_subregion ( address_space_mem, BBC_B_RAM_BASE, ram );
 
-	/* Initialise MOS ROM */
-	bbc_load_mos ( BBC_B_MOS_NAME, BBC_B_MOS_BASE, BBC_B_MOS_SIZE );
+	/* Initialise ROM */
+	bbc_load_mos ( BBC_B_MOS_FILENAME, BBC_B_MOS_BASE, BBC_B_MOS_SIZE );
+	bbc_load_paged_roms ( BBC_B_BASIC_FILENAME );
 
 	/* Initialise interrupts */
 	bbc_init_interrupts();
