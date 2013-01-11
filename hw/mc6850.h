@@ -35,7 +35,8 @@ struct MC6850ACIA {
 /** Size of memory region */
 #define MC6850_SIZE 0x08
 
-extern void mc6850_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
-			  const char *name, CharDriverState *chr );
+extern MC6850ACIA * mc6850_init ( MemoryRegion *parent, hwaddr offset,
+				  hwaddr size, const char *name,
+				  CharDriverState *chr );
 
 #endif

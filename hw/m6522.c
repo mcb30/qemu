@@ -787,9 +787,11 @@ static const VMStateDescription vmstate_m6522 = {
  * @v name		Device name
  * @v ops		VIA operations
  * @v irq		Interrupt request line
+ * @ret via		6522 VIA
  */
-void m6522_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
-		  const char *name, const M6522VIAOps *ops, qemu_irq irq ) {
+M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
+			const char *name, const M6522VIAOps *ops,
+			qemu_irq irq ) {
 	M6522VIA *via = g_new0 ( M6522VIA, 1 );
 
 	/* Initialise VIA */
@@ -804,4 +806,6 @@ void m6522_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, offset, &vmstate_m6522, via );
+
+	return via;
 }

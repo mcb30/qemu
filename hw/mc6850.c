@@ -100,9 +100,10 @@ static const VMStateDescription vmstate_mc6850 = {
  * @v size		Size of memory region
  * @v name		Device name
  * @v chr		Character device
+ * @ret acia		6850 ACIA
  */
-void mc6850_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
-		   const char *name, CharDriverState *chr ) {
+MC6850ACIA * mc6850_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
+			   const char *name, CharDriverState *chr ) {
 	MC6850ACIA *acia = g_new0 ( MC6850ACIA, 1 );
 
 	/* Initialise ACIA */
@@ -116,4 +117,6 @@ void mc6850_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, offset, &vmstate_mc6850, acia );
+
+	return acia;
 }

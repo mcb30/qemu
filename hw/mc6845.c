@@ -228,9 +228,10 @@ static const VMStateDescription vmstate_mc6845 = {
  * @v offset		Offset within parent memory region
  * @v size		Size of memory region
  * @v name		Device name
+ * @ret crtc		6845 CRTC
  */
-void mc6845_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
-		   const char *name ) {
+MC6845CRTC * mc6845_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
+			   const char *name ) {
 	MC6845CRTC *crtc = g_new0 ( MC6845CRTC, 1 );
 
 	/* Initialise CRTC */
@@ -243,4 +244,6 @@ void mc6845_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, offset, &vmstate_mc6845, crtc );
+
+	return crtc;
 }

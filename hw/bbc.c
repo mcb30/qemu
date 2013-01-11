@@ -38,8 +38,6 @@
 typedef struct {
 	/** Addressable latch */
 	uint8_t addressable_latch;
-	/** Paged ROM select register */
-	uint8_t paged_rom;
 } BBCState;
 
 /** System state description */
@@ -49,7 +47,6 @@ static const VMStateDescription vmstate_bbc = {
 	.minimum_version_id = 1,
 	.fields = ( VMStateField[] ) {
 		VMSTATE_UINT8 ( addressable_latch, BBCState ),
-		VMSTATE_UINT8 ( paged_rom, BBCState ),
 		VMSTATE_END_OF_LIST()
 	},
 };
@@ -101,7 +98,7 @@ static void bbc_nmi_handler ( void *opaque, int n, int level ) {
  * Initialise interrupts
  *
  */
-static void bbc_init_interrupts ( void ) {
+static void bbc_interrupts_init ( void ) {
 
 	/* Allocate IRQ and NMI interrupts */
 	bbc_irq = qemu_allocate_irqs ( bbc_irq_handler, NULL, 1 )[0];
@@ -110,17 +107,167 @@ static void bbc_init_interrupts ( void ) {
 
 /******************************************************************************
  *
+ * Video ULA (SHEILA &20-&2F)
+ *
+ */
+
+/** Video ULA */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Memory region */
+	MemoryRegion mr;
+} BBCVideoULA;
+
+/** Video ULA state description */
+static const VMStateDescription vmstate_bbc_video_ula = {
+	.name = "bbc_video_ula",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_END_OF_LIST()
+	},
+};
+
+/**
+ * Read from video ULA register
+ *
+ * @v opaque		Video ULA
+ * @v addr		Register address
+ * @v size		Size of read
+ * @ret data		Read data
+ */
+static uint64_t bbc_video_ula_read ( void *opaque, hwaddr addr,
+				     unsigned int size ) {
+
+	/* These are write-only registers */
+	return 0;
+}
+
+/**
+ * Write to video ULA register
+ *
+ * @v opaque		Video ULA
+ * @v addr		Register address
+ * @v data64		Data to write
+ * @v size		Size of write
+ */
+static void bbc_video_ula_write ( void *opaque, hwaddr addr,
+				  uint64_t data64, unsigned int size ) {
+	BBCVideoULA *ula = opaque;
+	uint8_t data = data64;
+
+	/* Write to specified register */
+	switch ( addr & ( BBC_VIDEO_ULA_SIZE - 1 ) ) {
+		//	case BBC_VIDEO_ULA_SIZE:
+		
+		//		break;
+	default:
+		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to "
+				"0x%02lx\n", ula->name, data, addr );
+		break;
+
+	}
+}
+
+/** Video ULA operations */
+static const MemoryRegionOps bbc_video_ula_ops = {
+	.read = bbc_video_ula_read,
+	.write = bbc_video_ula_write,
+};
+
+/**
+ * Initialise video ULA
+ *
+ * @v parent		Parent memory region
+ * @v offset		Offset within parent memory region
+ * @v size		Size of memory region
+ * @v name		Device name
+ * @ret ula		Video ULA
+ */
+static BBCVideoULA * bbc_video_ula_init ( MemoryRegion *parent, hwaddr offset,
+					  hwaddr size, const char *name ) {
+	BBCVideoULA *ula = g_new0 ( BBCVideoULA, 1 );
+
+	/* Initialise ULA */
+	ula->name = name;
+
+	/* Register memory region */
+	memory_region_init_io ( &ula->mr, &bbc_video_ula_ops, ula, name, size );
+	memory_region_add_subregion ( parent, offset, &ula->mr );
+
+	/* Register virtual machine state */
+	vmstate_register ( NULL, offset, &vmstate_bbc_video_ula, ula );
+
+	return ula;
+}
+
+/******************************************************************************
+ *
  * Paged ROMs
  *
  */
 
-/** Paged ROM memory region */
-static MemoryRegion bbc_paged_rom_mr;
+/** Paged ROM */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Paged ROM memory region */
+	MemoryRegion rom;
+	/** Paged ROM bank memory region */
+	MemoryRegion roms;
+	/** Paged ROM select register memory region */
+	MemoryRegion select;
+	/** Base target physical address */
+	hwaddr targphys;
+	/** Paged ROM size */
+	hwaddr size;
+	/** Number of paged ROMs */
+	unsigned int count;
+
+	/** Paged ROM select register */
+	uint8_t page;
+} BBCPagedROM;
+
+/** Paged ROM state description */
+static const VMStateDescription vmstate_bbc_paged_rom = {
+	.name = "bbc_paged_rom",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_UINT8 ( page, BBCPagedROM ),
+		VMSTATE_END_OF_LIST()
+	},
+};
+
+/**
+ * Calculate paged ROM bank offset
+ *
+ * @v paged		Paged ROM
+ * @v page		Page
+ * @ret offset		Offset within page ROM bank
+ */
+static hwaddr bbc_paged_rom_offset ( BBCPagedROM *paged, unsigned int page ) {
+
+	return ( page * paged->size );
+}
+
+/**
+ * Calculate paged ROM bank physical address for load_image_targphys()
+ *
+ * @v paged		Paged ROM
+ * @v page		Page
+ * @ret targphys	Target physical address
+ */
+static hwaddr bbc_paged_rom_targphys ( BBCPagedROM *paged, unsigned int page ) {
+
+	return ( paged->targphys + bbc_paged_rom_offset ( paged, page ) );
+}
 
 /**
  * Read from paged ROM select register
  *
- * @v opaque		Opaque pointer
+ * @v opaque		Paged ROM
  * @v addr		Register address
  * @v size		Size of read
  * @ret data		Read data
@@ -135,19 +282,21 @@ static uint64_t bbc_paged_rom_select_read ( void *opaque, hwaddr addr,
 /**
  * Write to paged ROM select register
  *
- * @v opaque		Opaque pointer
+ * @v opaque		Paged ROM
  * @v addr		Register address
  * @v data64		Data to write
  * @v size		Size of write
  */
 static void bbc_paged_rom_select_write ( void *opaque, hwaddr addr,
-					 uint64_t data, unsigned int size ) {
-	unsigned int page;
+					 uint64_t data64, unsigned int size ) {
+	BBCPagedROM *paged = opaque;
+	uint8_t data = data64;
+	hwaddr offset;
 
 	/* Change offset address into paged ROM virtual memory region */
-	page = ( data & ( BBC_PAGED_ROM_COUNT - 1 ) );
-	memory_region_set_alias_offset ( &bbc_paged_rom_mr,
-					 ( page * BBC_PAGED_ROM_SIZE ) );
+	paged->page = ( data & ( paged->count - 1 ) );
+	offset = bbc_paged_rom_offset ( paged, paged->page );
+	memory_region_set_alias_offset ( &paged->rom, offset );
 }
 
 /** Paged ROM select register operations */
@@ -157,21 +306,67 @@ static const MemoryRegionOps bbc_paged_rom_select_ops = {
 };
 
 /**
- * Initialise paged ROM select register
+ * Initialise paged ROM
  *
  * @v parent		Parent memory region
  * @v offset		Offset within parent memory region
  * @v size		Size of memory region
  * @v name		Device name
+ * @v roms_offset	Offset within parent memory region of ROM bank
+ * @v targphys		Base physical address of ROM bank
+ * @v count		Number of paged ROMs
+ * @ret paged		Paged ROM
+ */
+static BBCPagedROM * bbc_paged_rom_init ( MemoryRegion *parent, hwaddr offset,
+					  hwaddr size, const char *name,
+					  hwaddr roms_offset, hwaddr targphys,
+					  unsigned int count ) {
+	BBCPagedROM *paged = g_new0 ( BBCPagedROM, 1 );
+	const char *roms_name = g_strdup_printf ( "%s.roms", name );
+
+	/* Initialise paged ROM */
+	paged->name = name;
+	paged->targphys = targphys;
+	paged->size = size;
+	paged->count = count;
+
+	/* Initialise ROM bank memory region.  There is no way for the
+	 * CPU to access this region directly, but it gives us an
+	 * address to pass to load_image_targphys().
+	 */
+	memory_region_init ( &paged->roms, roms_name,
+			     ( paged->count * paged->size ) );
+	memory_region_set_readonly ( &paged->roms, true );
+	memory_region_add_subregion ( parent, roms_offset, &paged->roms );
+
+	/* Initialise paged ROM memory region */
+	memory_region_init_alias ( &paged->rom, name, &paged->roms,
+				   0, paged->size );
+	memory_region_set_readonly ( &paged->rom, true );
+	memory_region_add_subregion ( parent, offset, &paged->rom );
+
+	/* Register virtual machine state */
+	vmstate_register ( NULL, offset, &vmstate_bbc_paged_rom, paged );
+
+	return paged;
+}
+
+/**
+ * Initialise paged ROM select register
+ *
+ * @v parent		Parent memory region
+ * @v offset		Offset within parent memory region
+ * @v size		Size of memory region
+ * @v paged		Paged ROM
  */
 static void bbc_paged_rom_select_init ( MemoryRegion *parent, hwaddr offset,
-					hwaddr size, const char *name ) {
-	MemoryRegion *mr = g_new ( MemoryRegion, 1 );
+					hwaddr size, BBCPagedROM *paged ) {
+	const char *select_name = g_strdup_printf ( "%s.select", paged->name );
 
-	/* Register memory region */
-	memory_region_init_io ( mr, &bbc_paged_rom_select_ops, NULL, name,
-				size );
-	memory_region_add_subregion ( parent, offset, mr );
+	/* Initialise select register memory region */
+	memory_region_init_io ( &paged->select, &bbc_paged_rom_select_ops,
+				paged, select_name, size );
+	memory_region_add_subregion ( parent, offset, &paged->select );	
 }
 
 /******************************************************************************
@@ -241,7 +436,7 @@ static void bbc_keyboard_leds ( void ) {
 
 /******************************************************************************
  *
- * System VIA (SHEILA &40-&4f)
+ * System VIA (SHEILA &40-&4F)
  *
  */
 
@@ -337,7 +532,7 @@ static M6522VIAOps bbc_system_via_ops = {
 
 /******************************************************************************
  *
- * User VIA (SHEILA &60-&6f)
+ * User VIA (SHEILA &60-&6F)
  *
  */
 
@@ -368,112 +563,193 @@ static M6522VIAOps bbc_user_via_ops = {
  *
  */
 
+/** Unimplemented memory region */
+typedef struct {
+	/** Name */
+	const char *name;
+} BBCUnimplementedMemoryRegion;
+
 /**
- * Dummy read from unimplemented I/O region
+ * Read from unimplemented I/O region
  *
- * @v opaque		Region name
+ * @v opaque		Unimplemented memory region
  * @v addr		Address within region
  * @v size		Size of read
  * @ret data		Read data
  */
-static uint64_t bbc_dummy_read ( void *opaque, hwaddr addr,
-				 unsigned int size ) {
-	char *name = opaque;
+static uint64_t bbc_unimplemented_read ( void *opaque, hwaddr addr,
+					 unsigned int size ) {
+	BBCUnimplementedMemoryRegion *region = opaque;
 
 	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from &%02lX\n",
-			name, addr );
+			region->name, addr );
 	return 0;
 }
 
 /**
- * Dummy write to unimplemented I/O region
+ * Write to unimplemented I/O region
  *
- * @v opaque		Region name
+ * @v opaque		Unimplemented memory region
  * @v addr		Address within region
  * @v data		Data to write
  * @v size		Size of write
  */
-static void bbc_dummy_write ( void *opaque, hwaddr addr, uint64_t data,
-			      unsigned int size ) {
-	char *name = opaque;
+static void bbc_unimplemented_write ( void *opaque, hwaddr addr, uint64_t data,
+				      unsigned int size ) {
+	BBCUnimplementedMemoryRegion *region = opaque;
 
 	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write to &%02lX\n",
-			name, addr );
+			region->name, addr );
 }
 
-/** Dummy I/O operations */
-static const MemoryRegionOps bbc_dummy_ops = {
-	.read = bbc_dummy_read,
-	.write = bbc_dummy_write,
+/** Unimplemented I/O region operations */
+static const MemoryRegionOps bbc_unimplemented_ops = {
+	.read = bbc_unimplemented_read,
+	.write = bbc_unimplemented_write,
 };
+
+/** FRED */
+typedef struct {
+	/** Memory region */
+	MemoryRegion mr;
+	/** Unimplemented memory region */
+	BBCUnimplementedMemoryRegion unimp;	
+} BBCFRED;
 
 /**
  * Initialise FRED
  *
+ * @v parent		Parent memory region
+ * @v offset		Offset within parent memory region
+ * @v name		Device name
+ * @ret fred		FRED
  */
-static void bbc_init_fred ( void ) {
-	MemoryRegion *address_space_mem = get_system_memory();
-	MemoryRegion *fred = g_new ( MemoryRegion, 1 );
-	static char name[] = "FRED";
+static BBCFRED * bbc_fred_init ( MemoryRegion *parent, hwaddr offset,
+				 const char *name ) {
+	BBCFRED *fred = g_new0 ( BBCFRED, 1 );
 
-	/* Set up FRED as a dummy I/O region */
-	memory_region_init_io ( fred, &bbc_dummy_ops, name, "bbc.fred",
-				BBC_FRED_SIZE );
-	memory_region_add_subregion_overlap ( address_space_mem, BBC_FRED_BASE,
-					      fred, 1 );
+	/* Initialise FRED */
+	fred->unimp.name = name;
+
+	/* Set up FRED as an unimplemented I/O region */
+	memory_region_init_io ( &fred->mr, &bbc_unimplemented_ops, &fred->unimp,
+				name, BBC_FRED_SIZE );
+	memory_region_add_subregion_overlap ( parent, offset, &fred->mr, 1 );
+
+	return fred;
 }
+
+/** JIM */
+typedef struct {
+	/** Memory region */
+	MemoryRegion mr;
+	/** Unimplemented memory region */
+	BBCUnimplementedMemoryRegion unimp;	
+} BBCJIM;
 
 /**
  * Initialise JIM
  *
+ * @v parent		Parent memory region
+ * @v offset		Offset within parent memory region
+ * @v name		Device name
+ * @ret jim		JIM
  */
-static void bbc_init_jim ( void ) {
-	MemoryRegion *address_space_mem = get_system_memory();
-	MemoryRegion *jim = g_new ( MemoryRegion, 1 );
-	static char name[] = "JIM";
+static BBCJIM * bbc_jim_init ( MemoryRegion *parent, hwaddr offset,
+			       const char *name ) {
+	BBCJIM *jim = g_new0 ( BBCJIM, 1 );
 
-	/* Set up JIM as a dummy I/O region */
-	memory_region_init_io ( jim, &bbc_dummy_ops, name, "bbc.jim",
-				BBC_JIM_SIZE );
-	memory_region_add_subregion_overlap ( address_space_mem, BBC_JIM_BASE,
-					      jim, 1 );
+	/* Initialise JIM */
+	jim->unimp.name = name;
+
+	/* Set up JIM as an unimplemented I/O region */
+	memory_region_init_io ( &jim->mr, &bbc_unimplemented_ops, &jim->unimp,
+				name, BBC_JIM_SIZE );
+	memory_region_add_subregion_overlap ( parent, offset, &jim->mr, 1 );
+
+	return jim;
 }
+
+/** SHEILA */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Memory region */
+	MemoryRegion mr;
+	/** Unimplemented memory region */
+	BBCUnimplementedMemoryRegion unimp;
+	/** CRTC */
+	MC6845CRTC *crtc;
+	/** ACIA */
+	MC6850ACIA *acia;
+	/** Video ULA */
+	BBCVideoULA *video_ula;
+	/** Paged ROM */
+	BBCPagedROM *paged;
+	/** System VIA */
+	M6522VIA *system_via;
+	/** User VIA */
+	M6522VIA *user_via;
+} BBCSHEILA;
 
 /**
  * Initialise SHEILA
  *
+ * @v parent		Parent memory region
+ * @v offset		Offset within parent memory region
+ * @v name		Device name
+ * @ret sheila		SHEILA
  */
-static void bbc_init_sheila ( void ) {
-	MemoryRegion *address_space_mem = get_system_memory();
-	MemoryRegion *sheila = g_new ( MemoryRegion, 1 );
-	static char name[] = "SHEILA";
+static BBCSHEILA * bbc_sheila_init ( MemoryRegion *parent, hwaddr offset,
+				     const char *name, BBCPagedROM *paged ) {
+	BBCSHEILA *sheila = g_new0 ( BBCSHEILA, 1 );
 
-	/* Set up SHEILA as a dummy I/O region */
-	memory_region_init_io ( sheila, &bbc_dummy_ops, name, "bbc.sheila",
-				BBC_SHEILA_SIZE );
-	memory_region_add_subregion_overlap ( address_space_mem,
-					      BBC_SHEILA_BASE, sheila, 1 );
+	/* Initialise SHEILA */
+	sheila->name = name;
+	sheila->unimp.name = name;
+	sheila->paged = paged;
+
+	/* Set up SHEILA as an unimplemented I/O container region to
+	 * catch any unimplemented accesses.
+	 */
+	memory_region_init_io ( &sheila->mr, &bbc_unimplemented_ops,
+				&sheila->unimp, name, BBC_SHEILA_SIZE );
+	memory_region_add_subregion_overlap ( parent, offset, &sheila->mr, 1 );
 
 	/* Initialise CRTC */
-	mc6845_init ( sheila, BBC_SHEILA_CRTC_BASE, BBC_SHEILA_CRTC_SIZE,
-		      "bbc.crtc" );
+	sheila->crtc = mc6845_init ( &sheila->mr, BBC_SHEILA_CRTC_BASE,
+				     BBC_SHEILA_CRTC_SIZE, "crtc" );
 
 	/* Initialise serial system */
-	mc6850_init ( sheila, BBC_SHEILA_ACIA_BASE, BBC_SHEILA_ACIA_SIZE,
-		      "bbc.acia", serial_hds[0] );
+	sheila->acia = mc6850_init ( &sheila->mr, BBC_SHEILA_ACIA_BASE,
+				     BBC_SHEILA_ACIA_SIZE, "acia",
+				     serial_hds[0] );
+
+	/* Initialise video ULA */
+	sheila->video_ula = bbc_video_ula_init ( &sheila->mr,
+						 BBC_SHEILA_VIDEO_ULA_BASE,
+						 BBC_SHEILA_VIDEO_ULA_SIZE,
+						 "video_ula" );
 
 	/* Initialise paged ROM select register */
-	bbc_paged_rom_select_init ( sheila, BBC_SHEILA_PAGED_ROM_SELECT_BASE,
+	bbc_paged_rom_select_init ( &sheila->mr,
+				    BBC_SHEILA_PAGED_ROM_SELECT_BASE,
 				    BBC_SHEILA_PAGED_ROM_SELECT_SIZE,
-				    "bbc.paged_rom_select" );
+				    sheila->paged );
 
 	/* Initialise system and user VIAs */
-	m6522_init ( sheila, BBC_SHEILA_SYSTEM_VIA_BASE,
-		     BBC_SHEILA_SYSTEM_VIA_SIZE, "bbc.system_via",
-		     &bbc_system_via_ops, bbc_irq );
-	m6522_init ( sheila, BBC_SHEILA_USER_VIA_BASE,
-		     BBC_SHEILA_USER_VIA_SIZE, "bbc.user_via",
-		     &bbc_user_via_ops, bbc_irq );
+	sheila->system_via = m6522_init ( &sheila->mr,
+					  BBC_SHEILA_SYSTEM_VIA_BASE,
+					  BBC_SHEILA_SYSTEM_VIA_SIZE,
+					  "system_via", &bbc_system_via_ops,
+					  bbc_irq );
+	sheila->user_via = m6522_init ( &sheila->mr,
+					BBC_SHEILA_USER_VIA_BASE,
+					BBC_SHEILA_USER_VIA_SIZE,
+					"user_via", &bbc_user_via_ops,
+					bbc_irq );
+
+	return sheila;
 }
 
 /******************************************************************************
@@ -539,7 +815,7 @@ static void bbc_load_mos ( const char *default_filename, hwaddr base,
 		bios_name = default_filename;
 
 	/* Load MOS ROM */
-	name = g_strdup_printf ( "bbc.mos %s", bios_name );
+	name = g_strdup_printf ( "mos %s", bios_name );
 	bbc_load_rom ( address_space_mem, name, bios_name, base, base,
 		       max_size );
 }
@@ -547,45 +823,27 @@ static void bbc_load_mos ( const char *default_filename, hwaddr base,
 /**
  * Load paged ROMs
  *
+ * @v paged		Paged ROM
  * @v basic_filename	Filename for BASIC ROM (always loaded)
  */
-static void bbc_load_paged_roms ( const char *basic_filename ) {
-	MemoryRegion *address_space_mem = get_system_memory();
-	MemoryRegion *roms = g_new ( MemoryRegion, 1 );
+static void bbc_load_paged_roms ( BBCPagedROM *paged,
+				  const char *basic_filename ) {
 	unsigned int i;
 	unsigned int page;
 	const char *filename;
 	const char *name;
 
-	/* Initialise paged ROM virtual memory region.  There is no
-	 * way for the CPU to access this region directly, but it
-	 * gives us an address to pass to load_image_targphys().
-	 */
-	memory_region_init ( roms, "bbc.roms",
-			     ( BBC_PAGED_ROM_COUNT * BBC_PAGED_ROM_SIZE ) );
-	memory_region_set_readonly ( roms, true );
-	memory_region_add_subregion ( address_space_mem,
-				      BBC_PAGED_ROM_VIRTUAL_BASE, roms );
-
-	/* Initialise paged ROM memory region */
-	memory_region_init_alias ( &bbc_paged_rom_mr, "bbc.paged_rom", roms,
-				   0, BBC_PAGED_ROM_SIZE );
-	memory_region_set_readonly ( &bbc_paged_rom_mr, true );
-	memory_region_add_subregion ( address_space_mem, BBC_PAGED_ROM_BASE,
-				      &bbc_paged_rom_mr );
-
 	/* Load any specified option ROMs plus the BASIC ROM */
-	for ( i = 0 ; ( ( i < BBC_PAGED_ROM_COUNT ) &&
+	for ( i = 0 ; ( ( i < paged->count ) &&
 			( i < ( nb_option_roms + 1 ) ) ) ; i++ ) {
-		page = ( BBC_PAGED_ROM_COUNT - i - 1 );
+		page = ( paged->count - i - 1 );
 		filename = ( ( i == nb_option_roms ) ? basic_filename :
 			     option_rom[0].name );
-		name = g_strdup_printf ( "bbc.rom%d %s", page, filename );
-		bbc_load_rom ( roms, name, filename,
-			       ( page * BBC_PAGED_ROM_SIZE ),
-			       ( BBC_PAGED_ROM_VIRTUAL_BASE +
-				 ( page * BBC_PAGED_ROM_SIZE ) ),
-			       BBC_PAGED_ROM_SIZE );
+		name = g_strdup_printf ( "rom%d %s", page, filename );
+		bbc_load_rom ( &paged->roms, name, filename,
+			       bbc_paged_rom_offset ( paged, page ),
+			       bbc_paged_rom_targphys ( paged, page ),
+			       paged->size );
 	}
 }
 
@@ -599,23 +857,30 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 	CPUM6502State *env;
 	MemoryRegion *address_space_mem = get_system_memory();
 	MemoryRegion *ram = g_new ( MemoryRegion, 1 );
+	BBCPagedROM *paged;
 
 	/* Initialise RAM */
-	memory_region_init_ram ( ram, "bbc.ram", BBC_B_RAM_SIZE );
+	memory_region_init_ram ( ram, "ram", BBC_B_RAM_SIZE );
 	vmstate_register_ram_global ( ram );
 	memory_region_add_subregion ( address_space_mem, BBC_B_RAM_BASE, ram );
 
-	/* Initialise ROM */
+	/* Initialise ROMs */
 	bbc_load_mos ( BBC_B_MOS_FILENAME, BBC_B_MOS_BASE, BBC_B_MOS_SIZE );
-	bbc_load_paged_roms ( BBC_B_BASIC_FILENAME );
+	paged = bbc_paged_rom_init ( address_space_mem,
+				     BBC_PAGED_ROM_BASE, BBC_PAGED_ROM_SIZE,
+				     "paged_rom",
+				     BBC_PAGED_ROM_VIRTUAL_BASE,
+				     BBC_PAGED_ROM_VIRTUAL_BASE,
+				     BBC_PAGED_ROM_COUNT );
+	bbc_load_paged_roms ( paged, BBC_B_BASIC_FILENAME );
 
 	/* Initialise interrupts */
-	bbc_init_interrupts();
+	bbc_interrupts_init();
 
 	/* Initialise FRED, JIM, and SHEILA */
-	bbc_init_fred();
-	bbc_init_jim();
-	bbc_init_sheila();
+	bbc_fred_init ( address_space_mem, BBC_FRED_BASE, "fred" );
+	bbc_jim_init ( address_space_mem, BBC_JIM_BASE, "jim" );
+	bbc_sheila_init ( address_space_mem, BBC_SHEILA_BASE, "sheila", paged );
 
 	/* Initialise CPU */
 	if ( cpu_model == NULL )
