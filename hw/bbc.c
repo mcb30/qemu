@@ -229,17 +229,6 @@ typedef struct {
 	uint8_t page;
 } BBCPagedROM;
 
-/** Paged ROM state description */
-static const VMStateDescription vmstate_bbc_paged_rom = {
-	.name = "bbc_paged_rom",
-	.version_id = 1,
-	.minimum_version_id = 1,
-	.fields = ( VMStateField[] ) {
-		VMSTATE_UINT8 ( page, BBCPagedROM ),
-		VMSTATE_END_OF_LIST()
-	},
-};
-
 /**
  * Calculate paged ROM bank offset
  *
@@ -247,7 +236,8 @@ static const VMStateDescription vmstate_bbc_paged_rom = {
  * @v page		Page
  * @ret offset		Offset within page ROM bank
  */
-static hwaddr bbc_paged_rom_offset ( BBCPagedROM *paged, unsigned int page ) {
+static inline hwaddr bbc_paged_rom_offset ( BBCPagedROM *paged,
+					    unsigned int page ) {
 
 	return ( page * paged->size );
 }
@@ -259,10 +249,51 @@ static hwaddr bbc_paged_rom_offset ( BBCPagedROM *paged, unsigned int page ) {
  * @v page		Page
  * @ret targphys	Target physical address
  */
-static hwaddr bbc_paged_rom_targphys ( BBCPagedROM *paged, unsigned int page ) {
+static inline hwaddr bbc_paged_rom_targphys ( BBCPagedROM *paged,
+					      unsigned int page ) {
 
 	return ( paged->targphys + bbc_paged_rom_offset ( paged, page ) );
 }
+
+/**
+ * Update paged ROM memory alias
+ *
+ * @v paged		Paged ROM
+ */
+static void bbc_paged_rom_update_alias ( BBCPagedROM *paged ) {
+	hwaddr offset;
+
+	/* Change offset address into paged ROM virtual memory region */
+	offset = bbc_paged_rom_offset ( paged, paged->page );
+	memory_region_set_alias_offset ( &paged->rom, offset );
+}
+
+/**
+ * Update paged ROM state after loading from snapshot
+ *
+ * @v opaque		Paged ROM
+ * @v version_id	State description version ID
+ */
+static int bbc_paged_rom_post_load ( void *opaque, int version_id ) {
+	BBCPagedROM *paged = opaque;
+
+	/* Update memory alias */
+	bbc_paged_rom_update_alias ( paged );
+
+	return 0;
+}
+
+/** Paged ROM state description */
+static const VMStateDescription vmstate_bbc_paged_rom = {
+	.name = "bbc_paged_rom",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.post_load = bbc_paged_rom_post_load,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_UINT8 ( page, BBCPagedROM ),
+		VMSTATE_END_OF_LIST()
+	},
+};
 
 /**
  * Read from paged ROM select register
@@ -291,12 +322,10 @@ static void bbc_paged_rom_select_write ( void *opaque, hwaddr addr,
 					 uint64_t data64, unsigned int size ) {
 	BBCPagedROM *paged = opaque;
 	uint8_t data = data64;
-	hwaddr offset;
 
-	/* Change offset address into paged ROM virtual memory region */
+	/* Store page and update memory alias */
 	paged->page = ( data & ( paged->count - 1 ) );
-	offset = bbc_paged_rom_offset ( paged, paged->page );
-	memory_region_set_alias_offset ( &paged->rom, offset );
+	bbc_paged_rom_update_alias ( paged );
 }
 
 /** Paged ROM select register operations */
