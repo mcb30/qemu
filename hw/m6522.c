@@ -778,15 +778,17 @@ static const VMStateDescription vmstate_m6522 = {
  * @v offset		Offset within memory region
  * @v name		Device name
  * @v ops		VIA operations
+ * @v irq		Interrupt request line
  */
 void m6522_init ( MemoryRegion *parent, hwaddr offset, const char *name,
-		  const M6522VIAOps *ops ) {
+		  const M6522VIAOps *ops, qemu_irq irq ) {
 	M6522VIA *via = g_new0 ( M6522VIA, 1 );
 
 	/* Initialise VIA */
 	via->name = name;
 	via->b.ops = &ops->b;
 	via->a.ops = &ops->a;
+	via->irq = irq;
 
 	/* Register memory region */
 	memory_region_init_io ( &via->mr, &m6522_ops, via, via->name,

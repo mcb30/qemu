@@ -19,6 +19,7 @@
 
 #include "cpu.h"
 #include "qemu/host-utils.h"
+#include "exec/softmmu_exec.h"
 
 /** A 6502 CPU model */
 typedef struct {
@@ -118,8 +119,8 @@ void m6502_dump_state ( CPUM6502State *env, FILE *f, fprintf_function fprintf,
 			int flags ) {
 
 	/* Dump state */
-	fprintf ( f, "PC=%04x A=%02x X=%02x Y=%02x S=%04x "
-		  "P=%02x(%c%c%c%c%c%c%c%c)\n", env->pc, env->a, env->x,
+	fprintf ( f, "PC=&%04X A=&%02X X=&%02X Y=&%02X S=&%04X "
+		  "P=&%02X(%c%c%c%c%c%c%c%c)\n", env->pc, env->a, env->x,
 		  env->y, ( M6502_STACK_BASE + env->s ), m6502_get_p ( env ),
 		  ( env->p_n ? 'N' : 'n' ),
 		  ( env->p_v ? 'V' : 'v' ),
@@ -131,6 +132,25 @@ void m6502_dump_state ( CPUM6502State *env, FILE *f, fprintf_function fprintf,
 		  ( env->p_c ? 'C' : 'c' ) );
 }
 
+/**
+ * Dump stack contents
+ *
+ * @v env		CPU state
+ */
+void m6502_dump_stack ( CPUM6502State *env, FILE *f,
+			fprintf_function fprintf ) {
+	uint16_t stack;
+	uint16_t i;
+
+	/* Dump stack */
+	stack = ( M6502_STACK_BASE + env->s );
+	fprintf ( f, "PC=&%04X S=&%04X", env->pc, stack );
+	for ( i = M6502_STACK_TOP ; i > stack ; i-- ) {
+		fprintf ( f, " &%02X", cpu_ldub_data ( env, i ) );
+	}
+	fprintf ( f, "\n" );
+}
+
 void m6502_tlb_fill ( CPUM6502State *env, target_ulong addr,
 		      int is_write, int mmu_idx, uintptr_t retaddr ) {
 
@@ -138,8 +158,40 @@ void m6502_tlb_fill ( CPUM6502State *env, target_ulong addr,
 	tlb_set_page ( env, addr, addr, PAGE_BITS, mmu_idx, TARGET_PAGE_SIZE );
 }
 
+static void m6502_irq ( CPUM6502State *env, uint16_t vector ) {
+	uint16_t stack;
+
+	/* Push program counter and status register onto stack */
+	env->s = ( ( env->s - 0x03 ) & 0xff );
+	stack = ( M6502_STACK_BASE + env->s );
+	cpu_stw_data ( env, ( stack + 1 ), env->pc );
+	cpu_stb_data ( env, ( stack + 0 ), m6502_get_p ( env ) );
+
+	/* Disable interrupts */
+	env->p_i = 1;
+
+	/* Load program counter from vector */
+	env->pc = cpu_lduw_data ( env, vector );
+}
+
 void m6502_interrupt ( CPUM6502State *env ) {
-	cpu_abort ( env, "Unhandled interrupt" );
+
+	//
+	return;
+
+	switch ( env->exception_index ) {
+	case EXCP_IRQ:
+		qemu_log_mask ( CPU_LOG_INT, "IRQ at &%04X\n", env->pc );
+		m6502_irq ( env, M6502_IRQ_VECTOR );
+		break;
+	case EXCP_NMI:
+		qemu_log_mask ( CPU_LOG_INT, "NMI at &%04X\n", env->pc );
+		m6502_irq ( env, M6502_NMI_VECTOR );
+		break;
+	default:
+		cpu_abort ( env, "Unhandled exception %d\n",
+			    env->exception_index );
+	}
 }
 
 hwaddr m6502_get_phys_page_debug ( CPUM6502State *env, target_ulong addr ) {

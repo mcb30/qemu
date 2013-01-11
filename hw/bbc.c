@@ -55,6 +55,57 @@ static BBCState bbc;
 
 /******************************************************************************
  *
+ * Interrupts
+ *
+ */
+
+/** Maskable interrupt */
+static qemu_irq bbc_irq;
+
+/** Non-maskable interrupt */
+static qemu_irq bbc_nmi;
+
+/**
+ * IRQ handler
+ *
+ */
+static void bbc_irq_handler ( void *opaque, int n, int level ) {
+
+	/* Control CPU IRQ pin */
+	if ( level ) {
+		cpu_interrupt ( first_cpu, CPU_INTERRUPT_HARD );
+	} else {
+		cpu_reset_interrupt ( first_cpu, CPU_INTERRUPT_HARD );
+	}
+}
+
+/**
+ * NMI handler
+ *
+ */
+static void bbc_nmi_handler ( void *opaque, int n, int level ) {
+
+	/* Control CPU NMI pin */
+	if ( level ) {
+		cpu_interrupt ( first_cpu, CPU_INTERRUPT_NMI );
+	} else {
+		cpu_reset_interrupt ( first_cpu, CPU_INTERRUPT_NMI );
+	}
+}
+
+/**
+ * Initialise interrupts
+ *
+ */
+static void bbc_init_interrupts ( void ) {
+
+	/* Allocate IRQ and NMI interrupts */
+	bbc_irq = qemu_allocate_irqs ( bbc_irq_handler, NULL, 1 )[0];
+	bbc_nmi = qemu_allocate_irqs ( bbc_nmi_handler, NULL, 1 )[0];
+}
+
+/******************************************************************************
+ *
  * Keyboard
  *
  */
@@ -338,9 +389,9 @@ static void bbc_init_sheila ( void ) {
 
 	/* Initialise system and user VIAs */
 	m6522_init ( sheila, BBC_SHEILA_SYSTEM_VIA, "bbc.system_via",
-		     &bbc_system_via_ops );
+		     &bbc_system_via_ops, bbc_irq );
 	m6522_init ( sheila, BBC_SHEILA_USER_VIA, "bbc.user_via",
-		     &bbc_user_via_ops );
+		     &bbc_user_via_ops, bbc_irq );
 }
 
 /******************************************************************************
@@ -406,6 +457,9 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 
 	/* Initialise MOS ROM */
 	bbc_load_mos ( BBC_B_MOS_NAME, BBC_B_MOS_BASE, BBC_B_MOS_SIZE );
+
+	/* Initialise interrupts */
+	bbc_init_interrupts();
 
 	/* Initialise FRED, JIM, and SHEILA */
 	bbc_init_fred();

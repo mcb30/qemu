@@ -33,9 +33,17 @@
 #define NB_MMU_MODES 1
 #define TARGET_PAGE_BITS 8
 
+#define CPU_INTERRUPT_NMI CPU_INTERRUPT_TGT_EXT_3
+
 /* The 6502 has a flat 16-bit address space */
 #define TARGET_PHYS_ADDR_SPACE_BITS 16
 #define TARGET_VIRT_ADDR_SPACE_BITS 16
+
+/** Exceptions */
+enum {
+	EXCP_IRQ,
+	EXCP_NMI,
+};
 
 /** Status register bits */
 enum {
@@ -160,6 +168,9 @@ extern void m6502_list ( FILE *f, fprintf_function cpu_fprintf );
 extern CPUM6502State * m6502_init ( const char *cpu_model );
 #define cpu_init m6502_init
 
+extern void m6502_dump_stack ( CPUM6502State *env, FILE *f,
+			       fprintf_function fprintf );
+
 #define cpu_dump_state m6502_dump_state
 #define cpu_save m6502_save
 #define cpu_load m6502_load
@@ -227,10 +238,12 @@ static inline void m6502_pc_from_tb ( CPUM6502State *env,
 }
 #define cpu_pc_from_tb m6502_pc_from_tb
 
+#define M6502_NMI_VECTOR 0xfffa
 #define M6502_RESET_VECTOR 0xfffc
-#define M6502_BREAK_VECTOR 0xfffe
+#define M6502_IRQ_VECTOR 0xfffe
 #define M6502_ADDRESS_MASK 0xffff
 #define M6502_ZERO_PAGE_MASK 0xff
 #define M6502_STACK_BASE 0x0100
+#define M6502_STACK_TOP 0x01ff
 
 #endif

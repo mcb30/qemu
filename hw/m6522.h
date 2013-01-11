@@ -138,6 +138,6 @@ struct M6522VIA {
 #define M6522_INT_CB_BOTH ( M6522_INT_CB1 | M6522_INT_CB2 )
 
 extern void m6522_init ( MemoryRegion *parent, hwaddr offset, const char *name,
-			 const M6522VIAOps *ops );
+			 const M6522VIAOps *ops, qemu_irq irq );
 
 #endif

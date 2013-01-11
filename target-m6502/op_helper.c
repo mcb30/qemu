@@ -49,6 +49,10 @@ void helper_dump_state ( CPUM6502State *env ) {
 	m6502_dump_state ( env, stderr, fprintf, 0 );
 }
 
+void helper_dump_stack ( CPUM6502State *env ) {
+	m6502_dump_stack ( env, stderr, fprintf );
+}
+
 uint32_t helper_get_p ( CPUM6502State *env ) {
 	return m6502_get_p ( env );
 }

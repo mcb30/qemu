@@ -366,6 +366,18 @@ int cpu_exec(CPUArchState *env)
                         do_interrupt(env);
                         next_tb = 0;
                     }
+#elif defined(TARGET_M6502)
+                    if ((interrupt_request & CPU_INTERRUPT_HARD)
+			&& (!env->p_i)) {
+                        env->exception_index = EXCP_IRQ;
+                        do_interrupt(env);
+                        next_tb = 0;
+                    }
+		    if (interrupt_request & CPU_INTERRUPT_NMI){
+                        env->exception_index = EXCP_NMI;
+                        do_interrupt(env);
+                        next_tb = 0;
+		    }
 #elif defined(TARGET_MICROBLAZE)
                     if ((interrupt_request & CPU_INTERRUPT_HARD)
                         && (env->sregs[SR_MSR] & MSR_IE)

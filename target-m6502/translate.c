@@ -102,7 +102,7 @@ unsigned int m6502_get_p ( CPUM6502State *env ) {
 
 	return ( ( env->p_c << P_C ) | ( ( ! env->p_nz ) << P_Z ) |
 		 ( env->p_i << P_I ) | ( env->p_d << P_D ) |
-		 ( env->p_b << P_D ) | ( env->p_u << P_U ) |
+		 ( env->p_b << P_B ) | ( env->p_u << P_U ) |
 		 ( ( !! env->p_v ) << P_V ) | env->p_n );
 }
 
@@ -118,6 +118,7 @@ void m6502_set_p ( CPUM6502State *env, unsigned int p ) {
 	env->p_nz = ~( p & ( 1 << P_Z ) );
 	env->p_i = ( ( p >> P_I ) & 1 );
 	env->p_d = ( ( p >> P_D ) & 1 );
+	env->p_b = ( ( p >> P_B ) & 1 );
 	env->p_u = ( ( p >> P_U ) & 1 );
 	env->p_v = ( p & ( 1 << P_V ) );
 	env->p_n = ( p & ( 1 << P_N ) );
@@ -868,10 +869,13 @@ static void m6502_gen_pull ( DisasContext *dc ) {
 	tcg_gen_qemu_ld8u ( dest->var, stack, MEM_INDEX );
 	tcg_temp_free_i32 ( stack );
 
-	/* Generate flags from P value, if applicable */
+	/* Generate flags from P value, or set flags based on A */
 	if ( dest == &cpu_p ) {
 		gen_helper_set_p ( cpu_env, cpu_p.var );
 		tcg_temp_free_i32 ( cpu_p.var );
+	} else {
+		tcg_gen_mov_i32 ( cpu_p_nz.var, dest->var );
+		tcg_gen_andi_i32 ( cpu_p_n.var, dest->var, 0x80 );
 	}
 
 	/* Generate disassembly */
@@ -1137,6 +1141,9 @@ static void m6502_gen_break ( DisasContext *dc ) {
 	TCGv_i32 retaddr;
 	TCGv_i32 vector;
 
+	/* Set break flag */
+	tcg_gen_movi_i32 ( cpu_p_b.var, 1 );
+
 	/* Store return address and status register on stack */
 	stack = tcg_temp_new_i32();
 	retaddr = tcg_const_i32 ( dc->pc + 2 );
@@ -1154,11 +1161,8 @@ static void m6502_gen_break ( DisasContext *dc ) {
 	tcg_gen_subi_i32 ( cpu_s.var, cpu_s.var, 3 );
 	tcg_gen_andi_i32 ( cpu_s.var, cpu_s.var, 0xff );
 
-	/* Set break flag */
-	tcg_gen_movi_i32 ( cpu_p_b.var, 1 );
-
 	/* Jump to break vector */
-	vector = tcg_const_i32 ( M6502_RESET_VECTOR );
+	vector = tcg_const_i32 ( M6502_IRQ_VECTOR );
 	tcg_gen_qemu_ld16u ( cpu_pc, vector, MEM_INDEX );
 	tcg_temp_free_i32 ( vector );
 	tcg_gen_goto_tb ( 0 );
@@ -1169,6 +1173,40 @@ static void m6502_gen_break ( DisasContext *dc ) {
 
 	/* Generate disassembly */
 	LOG_DIS ( "&%04X : BRK\n", dc->pc );
+}
+
+/**
+ * Generate return from interrupt instruction (RTI)
+ *
+ * @v dc		Disassembly context
+ */
+static void m6502_gen_rti ( DisasContext *dc ) {
+	TCGv_i32 stack;
+
+	/* Increment stack pointer by three (with wrap-around) */
+	tcg_gen_addi_i32 ( cpu_s.var, cpu_s.var, 3 );
+	tcg_gen_andi_i32 ( cpu_s.var, cpu_s.var, 0xff );
+
+	/* Retrieve status register and return address from stack */
+	stack = tcg_temp_new_i32();
+	cpu_p.var = tcg_temp_new_i32();
+	tcg_gen_addi_i32 ( stack, cpu_s.var, M6502_STACK_BASE - 1 );
+	tcg_gen_qemu_ld16u ( cpu_pc, stack, MEM_INDEX );
+	tcg_gen_addi_i32 ( stack, cpu_s.var, M6502_STACK_BASE - 2 );
+	tcg_gen_qemu_ld8u ( cpu_p.var, stack, MEM_INDEX );
+	gen_helper_set_p ( cpu_env, cpu_p.var );
+	tcg_temp_free_i32 ( cpu_p.var );
+	tcg_temp_free_i32 ( stack );
+
+	/* Generate jump */
+	tcg_gen_goto_tb ( 0 );
+	tcg_gen_exit_tb ( 0 );
+
+	/* Stop translation */
+	dc->is_jmp = DISAS_JUMP;
+
+	/* Generate disassembly */
+	LOG_DIS ( "&%04X : RTI\n", dc->pc );
 }
 
 /**
@@ -1348,6 +1386,8 @@ static const M6502Instruction m6502_instructions[256] = {
 	[0x76] = { m6502_gen_ror,	NULL,	NULL,	m6502_zero_x,	2 },
 	[0x6e] = { m6502_gen_ror,	NULL,	NULL,	m6502_abs,	3 },
 	[0x7e] = { m6502_gen_ror,	NULL,	NULL,	m6502_abs_x,	3 },
+	/* RTI */
+	[0x40] = { m6502_gen_rti,	NULL,	NULL,	NULL,		1 },
 	/* RTS */
 	[0x60] = { m6502_gen_rts,	NULL,	NULL,	NULL,		1 },
 	/* SBC */
