@@ -23,7 +23,6 @@
 #include "mc6845.h"
 #include "mc6850.h"
 #include "m6522.h"
-#include "bbc_crt.h"
 
 #define BBC_B_RAM_BASE 0x0000
 #define BBC_B_RAM_SIZE 0x8000
@@ -211,6 +210,8 @@ typedef struct {
 	/** Memory region */
 	MemoryRegion mr;
 } BBCROM;
+
+#include "bbc_crt.h"
 
 /**
  * BBC Micro

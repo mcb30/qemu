@@ -178,7 +178,7 @@ static const VMStateDescription vmstate_bbc_video_ula = {
  * @ret ula		Video ULA
  */
 static BBCVideoULA * bbc_video_ula_init ( MemoryRegion *parent, hwaddr offset,
-					  hwaddr size, const char *name ) {
+					  uint64_t size, const char *name ) {
 	BBCVideoULA *ula = g_new0 ( BBCVideoULA, 1 );
 
 	/* Initialise ULA */
@@ -318,7 +318,7 @@ static const VMStateDescription vmstate_bbc_paged_rom = {
  * @ret paged		Paged ROM
  */
 static BBCPagedROM * bbc_paged_rom_init ( MemoryRegion *parent, hwaddr offset,
-					  hwaddr size, const char *name,
+					  uint64_t size, const char *name,
 					  hwaddr roms_offset, hwaddr targphys,
 					  unsigned int count ) {
 	BBCPagedROM *paged = g_new0 ( BBCPagedROM, 1 );
@@ -360,7 +360,7 @@ static BBCPagedROM * bbc_paged_rom_init ( MemoryRegion *parent, hwaddr offset,
  * @v paged		Paged ROM
  */
 static void bbc_paged_rom_select_init ( MemoryRegion *parent, hwaddr offset,
-					hwaddr size, BBCPagedROM *paged ) {
+					uint64_t size, BBCPagedROM *paged ) {
 	const char *select_name = g_strdup_printf ( "%s.select", paged->name );
 
 	/* Initialise select register memory region */
@@ -555,7 +555,7 @@ static const VMStateDescription vmstate_bbc_system_via = {
  * @ret via		System VIA
  */
 static BBCSystemVIA * bbc_system_via_init ( MemoryRegion *parent, hwaddr offset,
-					    hwaddr size, const char *name,
+					    uint64_t size, const char *name,
 					    qemu_irq irq ) {
 	BBCSystemVIA *via = g_new0 ( BBCSystemVIA, 1 );
 
@@ -617,7 +617,7 @@ static const VMStateDescription vmstate_bbc_user_via = {
  * @ret via		User VIA
  */
 static BBCUserVIA * bbc_user_via_init ( MemoryRegion *parent, hwaddr offset,
-					hwaddr size, const char *name,
+					uint64_t size, const char *name,
 					qemu_irq irq ) {
 	BBCUserVIA *via = g_new0 ( BBCUserVIA, 1 );
 
@@ -856,7 +856,7 @@ static void bbc_interrupts_init ( BBCMicro *bbc ) {
  * @ret rom		ROM
  */
 static BBCROM * bbc_load_rom ( MemoryRegion *parent, hwaddr offset,
-			       hwaddr size, const char *name,
+			       uint64_t size, const char *name,
 			       const char *filename, hwaddr targphys ) {
 	BBCROM *rom = g_new0 ( BBCROM, 1 );
 	const char *actual_filename;
@@ -900,8 +900,9 @@ static BBCROM * bbc_load_rom ( MemoryRegion *parent, hwaddr offset,
  * @v targphys		Target physical address
  * @ret rom		ROM
  */
-static BBCROM * bbc_load_mos ( MemoryRegion *parent, hwaddr offset, hwaddr size,
-			       const char *default_filename, hwaddr targphys ) {
+static BBCROM * bbc_load_mos ( MemoryRegion *parent, hwaddr offset,
+			       uint64_t size, const char *default_filename,
+			       hwaddr targphys ) {
 	const char *name;
 
 	/* Use default filename if no 'BIOS' name is specified */
@@ -1002,7 +1003,9 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 					"sheila", bbc->paged, bbc->irq );
 
 	/* Initialise display */
-	bbc->crt = bbc_crt_init ( "crt" );
+	bbc->crt = bbc_crt_init ( "crt", address_space_mem, bbc->sheila->crtc,
+				  bbc->sheila->video_ula,
+				  bbc->sheila->system_via );
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, 0, &vmstate_bbc, bbc );

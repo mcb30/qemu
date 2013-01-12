@@ -230,7 +230,7 @@ static const VMStateDescription vmstate_mc6845 = {
  * @v name		Device name
  * @ret crtc		6845 CRTC
  */
-MC6845CRTC * mc6845_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
+MC6845CRTC * mc6845_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
 			   const char *name ) {
 	MC6845CRTC *crtc = g_new0 ( MC6845CRTC, 1 );
 

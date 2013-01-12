@@ -790,7 +790,7 @@ static const VMStateDescription vmstate_m6522 = {
  * @v irq		Interrupt request line
  * @ret via		6522 VIA
  */
-M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
+M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
 			const char *name, void *opaque, const M6522VIAOps *ops,
 			qemu_irq irq ) {
 	M6522VIA *via = g_new0 ( M6522VIA, 1 );

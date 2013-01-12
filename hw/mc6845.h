@@ -134,6 +134,6 @@ static inline int mc6845_cursor_vert ( MC6845CRTC *crtc ) {
 #define MC6845_PEN_L 0x11
 
 extern MC6845CRTC * mc6845_init ( MemoryRegion *parent, hwaddr offset,
-				  hwaddr size, const char *name );
+				  uint64_t size, const char *name );
 
 #endif
