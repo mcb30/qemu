@@ -22,10 +22,10 @@
 #include "exec/address-spaces.h"
 #include "m6522.h"
 
-#define DEBUG_M6522 1
-
 typedef uint8_t ( * M6522VIARegRead ) ( M6522VIA *via );
 typedef void ( * M6522VIARegWrite ) ( M6522VIA *via, uint8_t data );
+
+#define DEBUG_M6522 1
 
 /* Debug messages */
 #define LOG_M6522(...) do {						\

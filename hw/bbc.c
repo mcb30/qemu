@@ -23,9 +23,6 @@
 #include "sysemu/sysemu.h"
 #include "ui/console.h"
 #include "loader.h"
-#include "mc6845.h"
-#include "mc6850.h"
-#include "m6522.h"
 #include "bbc.h"
 
 /******************************************************************************
@@ -1003,6 +1000,9 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 	bbc->jim = bbc_jim_init ( address_space_mem, BBC_JIM_BASE, "jim" );
 	bbc->sheila = bbc_sheila_init ( address_space_mem, BBC_SHEILA_BASE,
 					"sheila", bbc->paged, bbc->irq );
+
+	/* Initialise display */
+	bbc->crt = bbc_crt_init ( "crt" );
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, 0, &vmstate_bbc, bbc );
