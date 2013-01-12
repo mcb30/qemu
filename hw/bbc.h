@@ -104,6 +104,30 @@ typedef struct {
 } BBCVideoULA;
 
 /**
+ * Calculate CRTC clock rate (in MHz)
+ *
+ * @v ula		Video ULA
+ * @ret clock		Clock rate (in MHz)
+ */
+static inline unsigned int bbc_video_ula_crtc_clock ( BBCVideoULA *ula ) {
+
+	/* CRTC clock is either 2MHz (fast) or 1MHz (slow) */
+	return ( ula->crtc_clock_fast ? 2 : 1 );
+}
+
+/**
+ * Calculate pixel clock rate (in MHz)
+ *
+ * @v ula		Video ULA
+ * @ret clock		Clock rate (in MHz)
+ */
+static inline unsigned int bbc_video_ula_pixel_clock ( BBCVideoULA *ula ) {
+
+	/* Pixel clock is (2<<pixel_clock)MHz */
+	return ( 2 << ula->pixel_clock_shift );
+}
+
+/**
  * Paged ROM
  */
 typedef struct {

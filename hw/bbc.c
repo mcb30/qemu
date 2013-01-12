@@ -32,30 +32,6 @@
  */
 
 /**
- * Calculate CRTC clock rate (in MHz)
- *
- * @v ula		Video ULA
- * @ret clock		Clock rate (in MHz)
- */
-static inline unsigned int bbc_video_ula_crtc_clock ( BBCVideoULA *ula ) {
-
-	/* CRTC clock is either 2MHz (fast) or 1MHz (slow) */
-	return ( ula->crtc_clock_fast ? 2 : 1 );
-}
-
-/**
- * Calculate pixel clock rate (in MHz)
- *
- * @v ula		Video ULA
- * @ret clock		Clock rate (in MHz)
- */
-static inline unsigned int bbc_video_ula_pixel_clock ( BBCVideoULA *ula ) {
-
-	/* Pixel clock is (2<<pixel_clock)MHz */
-	return ( 2 << ula->pixel_clock_shift );
-}
-
-/**
  * Read from video ULA register
  *
  * @v opaque		Video ULA
@@ -1003,7 +979,7 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 					"sheila", bbc->paged, bbc->irq );
 
 	/* Initialise display */
-	bbc->crt = bbc_crt_init ( "crt", address_space_mem, bbc->sheila->crtc,
+	bbc->crt = bbc_crt_init ( "crt", &bbc->ram, bbc->sheila->crtc,
 				  bbc->sheila->video_ula,
 				  bbc->sheila->system_via );
 

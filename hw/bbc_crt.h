@@ -20,6 +20,15 @@
 #ifndef HW_BBC_CRT_H
 #define HW_BBC_CRT_H
 
+/** CRT pixel clock speed (in MHz)
+ *
+ * CRTs don't actually have a defined horizontal resolution.  We use a
+ * nominal CRT pixel clock of 16MHz (fairly close to PAL's 13.5MHz),
+ * which gives us a width of 640 pixels in all standard BBC screen
+ * modes.
+ */
+#define BBC_CRT_PIXEL_CLOCK 16
+
 /** CRT character size (non-teletext)
  *
  * In non-teletext address translation, bits A2..A0 are taken from the
@@ -28,6 +37,14 @@
  * lines.
  */
 #define BBC_CRT_CHAR_SIZE 8
+
+/** Video RAM area alignment
+ *
+ * We align to a multiple of four pages, to avoid changes in the
+ * mapping during hardware scrolling in modes that leave more than a
+ * single page unused (e.g. MODE 3).
+ */
+#define BBC_CRT_VIDEO_RAM_ALIGN 0x400
 
 /** CRTC address bit 12 selects the adjusted address for translation */
 #define BBC_CRTC_ADDR_ADJUST ( 1 << 12 )
@@ -63,8 +80,15 @@ typedef struct {
 typedef struct {
 	/** Name */
 	const char *name;
-	/** Parent memory region */
-	MemoryRegion *parent;
+	/** System RAM */
+	MemoryRegion *ram;
+	/** Video RAM
+	 *
+	 * The BBC display shares the main system RAM.  We create an
+	 * aliased region in order to enable dirty logging for only
+	 * the display RAM.
+	 */
+	MemoryRegion vram;
 	/** 6845 CRTC */
 	MC6845CRTC *crtc;
 	/** Video ULA */
@@ -73,18 +97,15 @@ typedef struct {
 	BBCSystemVIA *via;
 	/** Graphical console */
 	DisplayState *ds;
-	/** Memory region for video RAM
-	 *
-	 * The BBC display shares the main system RAM.  We create an
-	 * aliased region in order to enable dirty logging for only
-	 * the display RAM.
-	 */
-	MemoryRegion mr;
 
 	/** Display region prior to wrap-around */
 	BBCDisplayRegion first;
 	/** Display region after wrap-around */
 	BBCDisplayRegion second;
+	/** Start of video RAM */
+	hwaddr start;
+	/** Size of video RAM */
+	unsigned int size;
 } BBCDisplay;
 
 extern BBCDisplay * bbc_crt_init ( const char *name, MemoryRegion *parent,
