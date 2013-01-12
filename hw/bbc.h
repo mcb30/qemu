@@ -73,15 +73,35 @@
 #define BBC_LATCH_CAPS_LOCK 6
 #define BBC_LATCH_SHIFT_LOCK 7
 
-/** Video ULA */
+/**
+ * Video ULA
+ */
 typedef struct {
 	/** Name */
 	const char *name;
 	/** Memory region */
 	MemoryRegion mr;
+
+	/** Cursor segment mask (4 bits) */
+	uint8_t cursor_mask;
+	/** 6845 CRTC 2MHz/1MHz clock select */
+	uint8_t crtc_clock_fast;
+	/** Number of columns / pixel rate
+	 *
+	 * Pixel clock is (2<<pixel_clock) MHz
+	 */
+	uint8_t pixel_clock_shift;
+	/** Teletext enabled */
+	uint8_t teletext;
+	/** Invert flashing colours */
+	uint8_t flash;
+	/** Palette */
+	uint8_t palette[16];
 } BBCVideoULA;
 
-/** Paged ROM */
+/**
+ * Paged ROM
+ */
 typedef struct {
 	/** Name */
 	const char *name;
@@ -102,17 +122,22 @@ typedef struct {
 	uint8_t page;
 } BBCPagedROM;
 
-/** System VIA */
+/**
+ * System VIA
+ */
 typedef struct {
 	/** Name */
 	const char *name;
 	/** 6522 VIA */
 	M6522VIA *via;
+
 	/** Addressable latch */
 	uint8_t addressable_latch;
 } BBCSystemVIA;
 
-/** User VIA */
+/**
+ * User VIA
+ */
 typedef struct {
 	/** Name */
 	const char *name;
@@ -120,13 +145,17 @@ typedef struct {
 	M6522VIA *via;
 } BBCUserVIA;
 
-/** Unimplemented memory region */
+/**
+ * Unimplemented memory region
+ */
 typedef struct {
 	/** Name */
 	const char *name;
 } BBCUnimplementedMemoryRegion;
 
-/** FRED */
+/**
+ * FRED
+ */
 typedef struct {
 	/** Memory region */
 	MemoryRegion mr;
@@ -134,7 +163,9 @@ typedef struct {
 	BBCUnimplementedMemoryRegion unimp;	
 } BBCFRED;
 
-/** JIM */
+/**
+ * JIM
+ */
 typedef struct {
 	/** Memory region */
 	MemoryRegion mr;
@@ -142,7 +173,9 @@ typedef struct {
 	BBCUnimplementedMemoryRegion unimp;	
 } BBCJIM;
 
-/** SHEILA */
+/**
+ * SHEILA
+ */
 typedef struct {
 	/** Name */
 	const char *name;
@@ -164,7 +197,9 @@ typedef struct {
 	BBCUserVIA *user_via;
 } BBCSHEILA;
 
-/** BBC ROM */
+/**
+ * BBC ROM
+ */
 typedef struct {
 	/** Name */
 	const char *name;
@@ -172,7 +207,9 @@ typedef struct {
 	MemoryRegion mr;
 } BBCROM;
 
-/** BBC Micro */
+/**
+ * BBC Micro
+ */
 typedef struct {
 	/** Name */
 	const char *name;

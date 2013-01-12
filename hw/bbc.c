@@ -35,6 +35,30 @@
  */
 
 /**
+ * Calculate CRTC clock rate (in MHz)
+ *
+ * @v ula		Video ULA
+ * @ret clock		Clock rate (in MHz)
+ */
+static inline unsigned int bbc_video_ula_crtc_clock ( BBCVideoULA *ula ) {
+
+	/* CRTC clock is either 2MHz (fast) or 1MHz (slow) */
+	return ( ula->crtc_clock_fast ? 2 : 1 );
+}
+
+/**
+ * Calculate pixel clock rate (in MHz)
+ *
+ * @v ula		Video ULA
+ * @ret clock		Clock rate (in MHz)
+ */
+static inline unsigned int bbc_video_ula_pixel_clock ( BBCVideoULA *ula ) {
+
+	/* Pixel clock is (2<<pixel_clock)MHz */
+	return ( 2 << ula->pixel_clock_shift );
+}
+
+/**
  * Read from video ULA register
  *
  * @v opaque		Video ULA
@@ -47,6 +71,53 @@ static uint64_t bbc_video_ula_read ( void *opaque, hwaddr addr,
 
 	/* These are write-only registers */
 	return 0;
+}
+
+/**
+ * Write to video ULA control register
+ *
+ * @v ula		Video ULA
+ * @v data		Data to write
+ */
+static void bbc_video_ula_control_write ( BBCVideoULA *ula, uint8_t data ) {
+
+	/* Decode register */
+	ula->cursor_mask = ( ( ( ( data >> 7 ) & 0x01 ) << 0 ) |
+			     ( ( ( data >> 6 ) & 0x01 ) << 1 ) |
+			     ( ( ( data >> 5 ) & 0x01 ) << 2 ) |
+			     ( ( ( data >> 5 /* sic */ ) & 1 ) << 3 ) );
+	ula->crtc_clock_fast = ( ( data >> 4 ) & 0x01 );
+	ula->pixel_clock_shift = ( ( data >> 2 ) & 0x03 );
+	ula->teletext = ( ( data >> 1 ) & 0x01 );
+	ula->flash = ( ( data >> 0 ) & 0x01 );
+	qemu_log_mask ( CPU_LOG_IOPORT, "%s: cursor mask %c%c%c%c CRTC %dMHz "
+			"pixel %dMHz%s%s\n", ula->name,
+			( ( ula->cursor_mask & 0x01 ) ? 'X' : '-' ),
+			( ( ula->cursor_mask & 0x02 ) ? 'X' : '-' ),
+			( ( ula->cursor_mask & 0x04 ) ? 'X' : '-' ),
+			( ( ula->cursor_mask & 0x08 ) ? 'X' : '-' ),
+			bbc_video_ula_crtc_clock ( ula ),
+			bbc_video_ula_pixel_clock ( ula ),
+			( ula->teletext ? " teletext" : "" ),
+			( ula->flash ? " flash" : "" ) );
+}
+
+/**
+ * Write to video ULA palette register
+ *
+ * @v ula		Video ULA
+ * @v data		Data to write
+ */
+static void bbc_video_ula_palette_write ( BBCVideoULA *ula, uint8_t data ) {
+	unsigned int logical;
+	unsigned int actual;
+
+	/* Decode register and update palette */
+	logical = ( ( data >> 4 ) & 0x0f );
+	actual = ( ( data >> 0 ) & 0x0f );
+	ula->palette[logical] = actual;
+	qemu_log_mask ( CPU_LOG_IOPORT, "%s: logical colour &%x maps to actual "
+			"colour &%x\n", ula->name, logical, actual );
 }
 
 /**
@@ -64,12 +135,15 @@ static void bbc_video_ula_write ( void *opaque, hwaddr addr,
 
 	/* Write to specified register */
 	switch ( addr & ( BBC_VIDEO_ULA_SIZE - 1 ) ) {
-		//	case BBC_VIDEO_ULA_SIZE:
-		
-		//		break;
+	case BBC_VIDEO_ULA_CONTROL:
+		bbc_video_ula_control_write ( ula, data );
+		break;
+	case BBC_VIDEO_ULA_PALETTE:
+		bbc_video_ula_palette_write ( ula, data );
+		break;
 	default:
-		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to "
-				"0x%02lx\n", ula->name, data, addr );
+		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write &%02x to "
+				"&%02lx\n", ula->name, data, addr );
 		break;
 
 	}
@@ -87,6 +161,12 @@ static const VMStateDescription vmstate_bbc_video_ula = {
 	.version_id = 1,
 	.minimum_version_id = 1,
 	.fields = ( VMStateField[] ) {
+		VMSTATE_UINT8 ( cursor_mask, BBCVideoULA ),
+		VMSTATE_UINT8 ( crtc_clock_fast, BBCVideoULA ),
+		VMSTATE_UINT8 ( pixel_clock_shift, BBCVideoULA ),
+		VMSTATE_UINT8 ( teletext, BBCVideoULA ),
+		VMSTATE_UINT8 ( flash, BBCVideoULA ),
+		VMSTATE_UINT8_ARRAY ( palette, BBCVideoULA, 16 ),
 		VMSTATE_END_OF_LIST()
 	},
 };
@@ -322,35 +402,33 @@ static int bbc_keyboard_pressed ( uint8_t data ) {
 /**
  * Check if CAPS LOCK is enabled
  *
- * @v system_via	System VIA
+ * @v via		System VIA
  * @ret caps_lock	CAPS LOCK is enabled
  */
-static inline int bbc_caps_lock ( BBCSystemVIA *system_via ) {
+static inline int bbc_caps_lock ( BBCSystemVIA *via ) {
 
-	return ( system_via->addressable_latch &
-		 ( 1 << BBC_LATCH_CAPS_LOCK ) );
+	return ( via->addressable_latch & ( 1 << BBC_LATCH_CAPS_LOCK ) );
 }
 
 /**
  * Check if SHIFT LOCK is enabled
  *
- * @v system_via	System VIA
+ * @v via		System VIA
  * @ret shift_lock	SHIFT LOCK is enabled
  */
-static inline int bbc_shift_lock ( BBCSystemVIA *system_via ) {
+static inline int bbc_shift_lock ( BBCSystemVIA *via ) {
 
-	return ( system_via->addressable_latch &
-		 ( 1 << BBC_LATCH_SHIFT_LOCK ) );
+	return ( via->addressable_latch & ( 1 << BBC_LATCH_SHIFT_LOCK ) );
 }
 
 /**
  * Update keyboard LEDs
  *
- * @v system_via	System VIA
+ * @v via		System VIA
  */
-static void bbc_keyboard_leds ( BBCSystemVIA *system_via ) {
-	int caps_lock = bbc_caps_lock ( system_via );
-	int shift_lock = bbc_shift_lock ( system_via );
+static void bbc_keyboard_leds ( BBCSystemVIA *via ) {
+	int caps_lock = bbc_caps_lock ( via );
+	int shift_lock = bbc_shift_lock ( via );
 	int ledstate;
 
 	/* Update LEDs based on control bits in addressable latch */
@@ -375,15 +453,15 @@ static void bbc_keyboard_leds ( BBCSystemVIA *system_via ) {
  * @ret data		Slow data bus contents
  */
 static uint8_t bbc_slow_data ( void *opaque ) {
-	BBCSystemVIA *system_via = opaque;
-	M6522VIAPort *port = &system_via->via->a;
+	BBCSystemVIA *via = opaque;
+	M6522VIAPort *port = &via->via->a;
 	uint8_t data;
 
 	/* Set data equal to outputs for all pins configured as outputs */
 	data = ( port->or & port->ddr );
 
 	/* Read from keyboard into PA7 if keyboard is enabled */
-	if ( ! ( system_via->addressable_latch & ( 1 << BBC_LATCH_KB_WE ) ) ) {
+	if ( ! ( via->addressable_latch & ( 1 << BBC_LATCH_KB_WE ) ) ) {
 		data &= ~( 1 << 7 );
 		if ( bbc_keyboard_pressed ( data ) )
 			data |= ( 1 << 7 );
@@ -395,13 +473,13 @@ static uint8_t bbc_slow_data ( void *opaque ) {
 /**
  * Write to 76489 sound chip
  *
- * @v system_via	System VIA
+ * @v via		System VIA
  * @v port		Port
  */
-static void bbc_sound_write ( BBCSystemVIA *system_via ) {
+static void bbc_sound_write ( BBCSystemVIA *via ) {
 
 	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented sound write &%02x\n",
-			system_via->name, bbc_slow_data ( system_via ) );
+			via->name, bbc_slow_data ( via ) );
 }
 
 /**
@@ -411,7 +489,7 @@ static void bbc_sound_write ( BBCSystemVIA *system_via ) {
  * @v data		Output data
  */
 static void bbc_addressable_latch_write ( void *opaque, uint8_t data ) {
-	BBCSystemVIA *system_via = opaque;
+	BBCSystemVIA *via = opaque;
 	static const char * names[8] = {
 		[BBC_LATCH_SOUND_WE] = "SOUND_WE",
 		[BBC_LATCH_SPEECH_RS] = "SPEECH_RS",
@@ -428,22 +506,22 @@ static void bbc_addressable_latch_write ( void *opaque, uint8_t data ) {
 	/* Update addressable latch stored value */
 	latch_address = ( ( data >> 0 ) & 0x07 );
 	latch_data = ( ( data >> 3 ) & 0x01 );
-	system_via->addressable_latch &= ~( 1 << latch_address );
-	system_via->addressable_latch |= ( latch_data << latch_address );
+	via->addressable_latch &= ~( 1 << latch_address );
+	via->addressable_latch |= ( latch_data << latch_address );
 	qemu_log_mask ( CPU_LOG_IOPORT, "%s: addressable latch now &%02X "
-			"(bit %d %s %s)\n", system_via->name,
-			system_via->addressable_latch,latch_address,
-			names[latch_address], ( latch_data ? "high" : "low" ) );
+			"(bit %d %s %s)\n", via->name, via->addressable_latch,
+			latch_address, names[latch_address],
+			( latch_data ? "high" : "low" ) );
 
 	/* Handle write events */
 	switch ( latch_address ) {
 	case BBC_LATCH_SOUND_WE:
 		if ( ! latch_data )
-			bbc_sound_write ( system_via );
+			bbc_sound_write ( via );
 		break;
 	case BBC_LATCH_CAPS_LOCK:
 	case BBC_LATCH_SHIFT_LOCK:
-		bbc_keyboard_leds ( system_via );
+		bbc_keyboard_leds ( via );
 		break;
 	}
 }
@@ -477,22 +555,22 @@ static const VMStateDescription vmstate_bbc_system_via = {
  * @v size		Size of memory region
  * @v name		Device name
  * @v irq		Interrupt request line
- * @ret system_via	System VIA
+ * @ret via		System VIA
  */
 static BBCSystemVIA * bbc_system_via_init ( MemoryRegion *parent, hwaddr offset,
 					    hwaddr size, const char *name,
 					    qemu_irq irq ) {
-	BBCSystemVIA *system_via = g_new0 ( BBCSystemVIA, 1 );
+	BBCSystemVIA *via = g_new0 ( BBCSystemVIA, 1 );
 
 	/* Initialise system VIA */
-	system_via->name = name;
-	system_via->via = m6522_init ( parent, offset, size, name, system_via,
-				       &bbc_system_via_ops, irq );
+	via->name = name;
+	via->via = m6522_init ( parent, offset, size, name, via,
+				&bbc_system_via_ops, irq );
 
 	/* Register virtual machine state */
-	vmstate_register ( NULL, offset, &vmstate_bbc_system_via, system_via );
+	vmstate_register ( NULL, offset, &vmstate_bbc_system_via, via );
 
-	return system_via;
+	return via;
 }
 
 /******************************************************************************
@@ -508,11 +586,10 @@ static BBCSystemVIA * bbc_system_via_init ( MemoryRegion *parent, hwaddr offset,
  * @v data		Output data
  */
 static void bbc_parallel_write ( void *opaque, uint8_t data ) {
-	BBCUserVIA *user_via = opaque;
+	BBCUserVIA *via = opaque;
 
 	qemu_log_mask ( CPU_LOG_IOPORT, "%s: print character &%02x '%c'\n",
-			user_via->name, data,
-			( isprint ( data ) ? data : '.' ) );
+			via->name, data, ( isprint ( data ) ? data : '.' ) );
 }
 
 /** User VIA operations */
@@ -540,22 +617,22 @@ static const VMStateDescription vmstate_bbc_user_via = {
  * @v size		Size of memory region
  * @v name		Device name
  * @v irq		Interrupt request line
- * @ret user_via	User VIA
+ * @ret via		User VIA
  */
 static BBCUserVIA * bbc_user_via_init ( MemoryRegion *parent, hwaddr offset,
 					hwaddr size, const char *name,
 					qemu_irq irq ) {
-	BBCUserVIA *user_via = g_new0 ( BBCUserVIA, 1 );
+	BBCUserVIA *via = g_new0 ( BBCUserVIA, 1 );
 
 	/* Initialise user VIA */
-	user_via->name = name;
-	user_via->via = m6522_init ( parent, offset, size, name, user_via,
-				     &bbc_user_via_ops, irq );
+	via->name = name;
+	via->via = m6522_init ( parent, offset, size, name, via,
+				&bbc_user_via_ops, irq );
 
 	/* Register virtual machine state */
-	vmstate_register ( NULL, offset, &vmstate_bbc_user_via, user_via );
+	vmstate_register ( NULL, offset, &vmstate_bbc_user_via, via );
 
-	return user_via;
+	return via;
 }
 
 /******************************************************************************
