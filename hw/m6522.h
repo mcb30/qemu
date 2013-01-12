@@ -29,19 +29,17 @@ typedef struct {
 	/**
 	 * Input from port
 	 *
-	 * @v via		6522 VIA
-	 * @v port		Port
+	 * @v opaque		Opaque pointer
 	 * @ret data		Input data
 	 */
-	uint8_t ( * input ) ( M6522VIA *via, M6522VIAPort *port );
+	uint8_t ( * input ) ( void *opaque );
 	/**
 	 * Output to port
 	 *
-	 * @v via		6522 VIA
-	 * @v port		Port
+	 * @v opaque		Opaque pointer
 	 * @v data		Output data
 	 */
-	void ( * output ) ( M6522VIA *via, M6522VIAPort *port, uint8_t data );
+	void ( * output ) ( void *opaque, uint8_t data );
 } M6522VIAPortOps;
 
 /** 6522 VIA operations */
@@ -78,6 +76,8 @@ struct M6522VIA {
 	MemoryRegion mr;
 	/** IRQ */
 	qemu_irq irq;
+	/** Opaque pointer */
+	void *opaque;
 
 	/** Port B */
 	M6522VIAPort b;
@@ -138,7 +138,7 @@ struct M6522VIA {
 #define M6522_INT_CB_BOTH ( M6522_INT_CB1 | M6522_INT_CB2 )
 
 extern M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
-			       const char *name, const M6522VIAOps *ops,
-			       qemu_irq irq );
+			       const char *name, void *opaque,
+			       const M6522VIAOps *ops, qemu_irq irq );
 
 #endif

@@ -176,7 +176,7 @@ static uint8_t m6522_input ( M6522VIA *via, M6522VIAPort *port ) {
 	uint8_t data;
 
 	/* Input from port */
-	data = ( port->ops->input ? port->ops->input ( via, port ) : 0 );
+	data = ( port->ops->input ? port->ops->input ( via->opaque ) : 0 );
 
 	/* For IRB (but not IRA), pins programmed as outputs will
 	 * always read back the programmed output value.
@@ -202,7 +202,7 @@ static void m6522_output ( M6522VIA *via, M6522VIAPort *port, uint8_t data ) {
 
 	/* Output to port */
 	if ( port->ops->output )
-		port->ops->output ( via, port, data );
+		port->ops->output ( via->opaque, data );
 }
 
 /**
@@ -785,17 +785,19 @@ static const VMStateDescription vmstate_m6522 = {
  * @v offset		Offset within parent memory region
  * @v size		Size of memory region
  * @v name		Device name
+ * @v opaque		Opaque pointer
  * @v ops		VIA operations
  * @v irq		Interrupt request line
  * @ret via		6522 VIA
  */
 M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset, hwaddr size,
-			const char *name, const M6522VIAOps *ops,
+			const char *name, void *opaque, const M6522VIAOps *ops,
 			qemu_irq irq ) {
 	M6522VIA *via = g_new0 ( M6522VIA, 1 );
 
 	/* Initialise VIA */
 	via->name = name;
+	via->opaque = opaque;
 	via->b.ops = &ops->b;
 	via->a.ops = &ops->a;
 	via->irq = irq;

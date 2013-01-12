@@ -30,104 +30,9 @@
 
 /******************************************************************************
  *
- * System state
- *
- */
-
-/** System state definition */
-typedef struct {
-	/** Addressable latch */
-	uint8_t addressable_latch;
-} BBCState;
-
-/** System state description */
-static const VMStateDescription vmstate_bbc = {
-	.name = "bbc",
-	.version_id = 1,
-	.minimum_version_id = 1,
-	.fields = ( VMStateField[] ) {
-		VMSTATE_UINT8 ( addressable_latch, BBCState ),
-		VMSTATE_END_OF_LIST()
-	},
-};
-
-/** System state */
-static BBCState bbc;
-
-/******************************************************************************
- *
- * Interrupts
- *
- */
-
-/** Maskable interrupt */
-static qemu_irq bbc_irq;
-
-/** Non-maskable interrupt */
-static qemu_irq bbc_nmi;
-
-/**
- * IRQ handler
- *
- */
-static void bbc_irq_handler ( void *opaque, int n, int level ) {
-
-	/* Control CPU IRQ pin */
-	if ( level ) {
-		cpu_interrupt ( first_cpu, CPU_INTERRUPT_HARD );
-	} else {
-		cpu_reset_interrupt ( first_cpu, CPU_INTERRUPT_HARD );
-	}
-}
-
-/**
- * NMI handler
- *
- */
-static void bbc_nmi_handler ( void *opaque, int n, int level ) {
-
-	/* Control CPU NMI pin */
-	if ( level ) {
-		cpu_interrupt ( first_cpu, CPU_INTERRUPT_NMI );
-	} else {
-		cpu_reset_interrupt ( first_cpu, CPU_INTERRUPT_NMI );
-	}
-}
-
-/**
- * Initialise interrupts
- *
- */
-static void bbc_interrupts_init ( void ) {
-
-	/* Allocate IRQ and NMI interrupts */
-	bbc_irq = qemu_allocate_irqs ( bbc_irq_handler, NULL, 1 )[0];
-	bbc_nmi = qemu_allocate_irqs ( bbc_nmi_handler, NULL, 1 )[0];
-}
-
-/******************************************************************************
- *
  * Video ULA (SHEILA &20-&2F)
  *
  */
-
-/** Video ULA */
-typedef struct {
-	/** Name */
-	const char *name;
-	/** Memory region */
-	MemoryRegion mr;
-} BBCVideoULA;
-
-/** Video ULA state description */
-static const VMStateDescription vmstate_bbc_video_ula = {
-	.name = "bbc_video_ula",
-	.version_id = 1,
-	.minimum_version_id = 1,
-	.fields = ( VMStateField[] ) {
-		VMSTATE_END_OF_LIST()
-	},
-};
 
 /**
  * Read from video ULA register
@@ -176,6 +81,16 @@ static const MemoryRegionOps bbc_video_ula_ops = {
 	.write = bbc_video_ula_write,
 };
 
+/** Video ULA state description */
+static const VMStateDescription vmstate_bbc_video_ula = {
+	.name = "bbc_video_ula",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_END_OF_LIST()
+	},
+};
+
 /**
  * Initialise video ULA
  *
@@ -207,27 +122,6 @@ static BBCVideoULA * bbc_video_ula_init ( MemoryRegion *parent, hwaddr offset,
  * Paged ROMs
  *
  */
-
-/** Paged ROM */
-typedef struct {
-	/** Name */
-	const char *name;
-	/** Paged ROM memory region */
-	MemoryRegion rom;
-	/** Paged ROM bank memory region */
-	MemoryRegion roms;
-	/** Paged ROM select register memory region */
-	MemoryRegion select;
-	/** Base target physical address */
-	hwaddr targphys;
-	/** Paged ROM size */
-	hwaddr size;
-	/** Number of paged ROMs */
-	unsigned int count;
-
-	/** Paged ROM select register */
-	uint8_t page;
-} BBCPagedROM;
 
 /**
  * Calculate paged ROM bank offset
@@ -269,33 +163,6 @@ static void bbc_paged_rom_update_alias ( BBCPagedROM *paged ) {
 }
 
 /**
- * Update paged ROM state after loading from snapshot
- *
- * @v opaque		Paged ROM
- * @v version_id	State description version ID
- */
-static int bbc_paged_rom_post_load ( void *opaque, int version_id ) {
-	BBCPagedROM *paged = opaque;
-
-	/* Update memory alias */
-	bbc_paged_rom_update_alias ( paged );
-
-	return 0;
-}
-
-/** Paged ROM state description */
-static const VMStateDescription vmstate_bbc_paged_rom = {
-	.name = "bbc_paged_rom",
-	.version_id = 1,
-	.minimum_version_id = 1,
-	.post_load = bbc_paged_rom_post_load,
-	.fields = ( VMStateField[] ) {
-		VMSTATE_UINT8 ( page, BBCPagedROM ),
-		VMSTATE_END_OF_LIST()
-	},
-};
-
-/**
  * Read from paged ROM select register
  *
  * @v opaque		Paged ROM
@@ -332,6 +199,33 @@ static void bbc_paged_rom_select_write ( void *opaque, hwaddr addr,
 static const MemoryRegionOps bbc_paged_rom_select_ops = {
 	.read = bbc_paged_rom_select_read,
 	.write = bbc_paged_rom_select_write,
+};
+
+/**
+ * Update paged ROM state after loading from snapshot
+ *
+ * @v opaque		Paged ROM
+ * @v version_id	State description version ID
+ */
+static int bbc_paged_rom_post_load ( void *opaque, int version_id ) {
+	BBCPagedROM *paged = opaque;
+
+	/* Update memory alias */
+	bbc_paged_rom_update_alias ( paged );
+
+	return 0;
+}
+
+/** Paged ROM state description */
+static const VMStateDescription vmstate_bbc_paged_rom = {
+	.name = "bbc_paged_rom",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.post_load = bbc_paged_rom_post_load,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_UINT8 ( page, BBCPagedROM ),
+		VMSTATE_END_OF_LIST()
+	},
 };
 
 /**
@@ -428,30 +322,35 @@ static int bbc_keyboard_pressed ( uint8_t data ) {
 /**
  * Check if CAPS LOCK is enabled
  *
+ * @v system_via	System VIA
  * @ret caps_lock	CAPS LOCK is enabled
  */
-static inline int bbc_caps_lock ( void ) {
+static inline int bbc_caps_lock ( BBCSystemVIA *system_via ) {
 
-	return ( bbc.addressable_latch & ( 1 << BBC_LATCH_CAPS_LOCK ) );
+	return ( system_via->addressable_latch &
+		 ( 1 << BBC_LATCH_CAPS_LOCK ) );
 }
 
 /**
  * Check if SHIFT LOCK is enabled
  *
+ * @v system_via	System VIA
  * @ret shift_lock	SHIFT LOCK is enabled
  */
-static inline int bbc_shift_lock ( void ) {
+static inline int bbc_shift_lock ( BBCSystemVIA *system_via ) {
 
-	return ( bbc.addressable_latch & ( 1 << BBC_LATCH_SHIFT_LOCK ) );
+	return ( system_via->addressable_latch &
+		 ( 1 << BBC_LATCH_SHIFT_LOCK ) );
 }
 
 /**
  * Update keyboard LEDs
  *
+ * @v system_via	System VIA
  */
-static void bbc_keyboard_leds ( void ) {
-	int caps_lock = bbc_caps_lock();
-	int shift_lock = bbc_shift_lock();
+static void bbc_keyboard_leds ( BBCSystemVIA *system_via ) {
+	int caps_lock = bbc_caps_lock ( system_via );
+	int shift_lock = bbc_shift_lock ( system_via );
 	int ledstate;
 
 	/* Update LEDs based on control bits in addressable latch */
@@ -472,18 +371,19 @@ static void bbc_keyboard_leds ( void ) {
 /**
  * Get contents of slow data bus (system VIA port A)
  *
- * @v via		6522 VIA
- * @v port		Port
+ * @v opaque		System VIA
  * @ret data		Slow data bus contents
  */
-static uint8_t bbc_slow_data ( M6522VIA *via, M6522VIAPort *port ) {
+static uint8_t bbc_slow_data ( void *opaque ) {
+	BBCSystemVIA *system_via = opaque;
+	M6522VIAPort *port = &system_via->via->a;
 	uint8_t data;
 
 	/* Set data equal to outputs for all pins configured as outputs */
 	data = ( port->or & port->ddr );
 
 	/* Read from keyboard into PA7 if keyboard is enabled */
-	if ( ! ( bbc.addressable_latch & ( 1 << BBC_LATCH_KB_WE ) ) ) {
+	if ( ! ( system_via->addressable_latch & ( 1 << BBC_LATCH_KB_WE ) ) ) {
 		data &= ~( 1 << 7 );
 		if ( bbc_keyboard_pressed ( data ) )
 			data |= ( 1 << 7 );
@@ -494,25 +394,24 @@ static uint8_t bbc_slow_data ( M6522VIA *via, M6522VIAPort *port ) {
 
 /**
  * Write to 76489 sound chip
- * 
- * @v via		6522 VIA
+ *
+ * @v system_via	System VIA
  * @v port		Port
  */
-static void bbc_sound_write ( M6522VIA *via, M6522VIAPort *port ) {
+static void bbc_sound_write ( BBCSystemVIA *system_via ) {
 
-	qemu_log_mask ( LOG_UNIMP, "BBC: unimplemented sound write &%02x\n",
-			bbc_slow_data ( via, port ) );
+	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented sound write &%02x\n",
+			system_via->name, bbc_slow_data ( system_via ) );
 }
 
 /**
  * Write to addressable latch (system VIA port B)
  *
- * @v via		6522 VIA
- * @v port		Port
+ * @v opaque		System VIA
  * @v data		Output data
  */
-static void bbc_addressable_latch_write ( M6522VIA *via, M6522VIAPort *port,
-					  uint8_t data ) {
+static void bbc_addressable_latch_write ( void *opaque, uint8_t data ) {
+	BBCSystemVIA *system_via = opaque;
 	static const char * names[8] = {
 		[BBC_LATCH_SOUND_WE] = "SOUND_WE",
 		[BBC_LATCH_SPEECH_RS] = "SPEECH_RS",
@@ -529,22 +428,22 @@ static void bbc_addressable_latch_write ( M6522VIA *via, M6522VIAPort *port,
 	/* Update addressable latch stored value */
 	latch_address = ( ( data >> 0 ) & 0x07 );
 	latch_data = ( ( data >> 3 ) & 0x01 );
-	bbc.addressable_latch &= ~( 1 << latch_address );
-	bbc.addressable_latch |= ( latch_data << latch_address );
-	qemu_log_mask ( CPU_LOG_IOPORT, "BBC: addressable latch now &%02X "
-			"(bit %d %s %s)\n", bbc.addressable_latch,
-			latch_address, names[latch_address],
-			( latch_data ? "high" : "low" ) );
+	system_via->addressable_latch &= ~( 1 << latch_address );
+	system_via->addressable_latch |= ( latch_data << latch_address );
+	qemu_log_mask ( CPU_LOG_IOPORT, "%s: addressable latch now &%02X "
+			"(bit %d %s %s)\n", system_via->name,
+			system_via->addressable_latch,latch_address,
+			names[latch_address], ( latch_data ? "high" : "low" ) );
 
 	/* Handle write events */
 	switch ( latch_address ) {
 	case BBC_LATCH_SOUND_WE:
 		if ( ! latch_data )
-			bbc_sound_write ( via, port );
+			bbc_sound_write ( system_via );
 		break;
 	case BBC_LATCH_CAPS_LOCK:
 	case BBC_LATCH_SHIFT_LOCK:
-		bbc_keyboard_leds();
+		bbc_keyboard_leds ( system_via );
 		break;
 	}
 }
@@ -559,6 +458,43 @@ static M6522VIAOps bbc_system_via_ops = {
 	},
 };
 
+/** System VIA state description */
+static const VMStateDescription vmstate_bbc_system_via = {
+	.name = "bbc_system_via",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_UINT8 ( addressable_latch, BBCSystemVIA ),
+		VMSTATE_END_OF_LIST()
+	},
+};
+
+/**
+ * Initialise system VIA
+ *
+ * @v parent		Parent memory region
+ * @v offset		Offset within parent memory region
+ * @v size		Size of memory region
+ * @v name		Device name
+ * @v irq		Interrupt request line
+ * @ret system_via	System VIA
+ */
+static BBCSystemVIA * bbc_system_via_init ( MemoryRegion *parent, hwaddr offset,
+					    hwaddr size, const char *name,
+					    qemu_irq irq ) {
+	BBCSystemVIA *system_via = g_new0 ( BBCSystemVIA, 1 );
+
+	/* Initialise system VIA */
+	system_via->name = name;
+	system_via->via = m6522_init ( parent, offset, size, name, system_via,
+				       &bbc_system_via_ops, irq );
+
+	/* Register virtual machine state */
+	vmstate_register ( NULL, offset, &vmstate_bbc_system_via, system_via );
+
+	return system_via;
+}
+
 /******************************************************************************
  *
  * User VIA (SHEILA &60-&6F)
@@ -568,15 +504,15 @@ static M6522VIAOps bbc_system_via_ops = {
 /**
  * Write to parallel port (user VIA port A)
  *
- * @v via		6522 VIA
- * @v port		Port
+ * @v opaque		User VIA
  * @v data		Output data
  */
-static void bbc_parallel_write ( M6522VIA *via, M6522VIAPort *port,
-				 uint8_t data ) {
+static void bbc_parallel_write ( void *opaque, uint8_t data ) {
+	BBCUserVIA *user_via = opaque;
 
-	qemu_log_mask ( CPU_LOG_IOPORT, "BBC: print character &%02x '%c'\n",
-			data, ( isprint ( data ) ? data : '.' ) );
+	qemu_log_mask ( CPU_LOG_IOPORT, "%s: print character &%02x '%c'\n",
+			user_via->name, data,
+			( isprint ( data ) ? data : '.' ) );
 }
 
 /** User VIA operations */
@@ -586,17 +522,47 @@ static M6522VIAOps bbc_user_via_ops = {
 	},
 };
 
+/** User VIA state description */
+static const VMStateDescription vmstate_bbc_user_via = {
+	.name = "bbc_user_via",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_END_OF_LIST()
+	},
+};
+
+/**
+ * Initialise user VIA
+ *
+ * @v parent		Parent memory region
+ * @v offset		Offset within parent memory region
+ * @v size		Size of memory region
+ * @v name		Device name
+ * @v irq		Interrupt request line
+ * @ret user_via	User VIA
+ */
+static BBCUserVIA * bbc_user_via_init ( MemoryRegion *parent, hwaddr offset,
+					hwaddr size, const char *name,
+					qemu_irq irq ) {
+	BBCUserVIA *user_via = g_new0 ( BBCUserVIA, 1 );
+
+	/* Initialise user VIA */
+	user_via->name = name;
+	user_via->via = m6522_init ( parent, offset, size, name, user_via,
+				     &bbc_user_via_ops, irq );
+
+	/* Register virtual machine state */
+	vmstate_register ( NULL, offset, &vmstate_bbc_user_via, user_via );
+
+	return user_via;
+}
+
 /******************************************************************************
  *
  * FRED, JIM and SHEILA
  *
  */
-
-/** Unimplemented memory region */
-typedef struct {
-	/** Name */
-	const char *name;
-} BBCUnimplementedMemoryRegion;
 
 /**
  * Read from unimplemented I/O region
@@ -637,14 +603,6 @@ static const MemoryRegionOps bbc_unimplemented_ops = {
 	.write = bbc_unimplemented_write,
 };
 
-/** FRED */
-typedef struct {
-	/** Memory region */
-	MemoryRegion mr;
-	/** Unimplemented memory region */
-	BBCUnimplementedMemoryRegion unimp;	
-} BBCFRED;
-
 /**
  * Initialise FRED
  *
@@ -667,14 +625,6 @@ static BBCFRED * bbc_fred_init ( MemoryRegion *parent, hwaddr offset,
 
 	return fred;
 }
-
-/** JIM */
-typedef struct {
-	/** Memory region */
-	MemoryRegion mr;
-	/** Unimplemented memory region */
-	BBCUnimplementedMemoryRegion unimp;	
-} BBCJIM;
 
 /**
  * Initialise JIM
@@ -699,38 +649,18 @@ static BBCJIM * bbc_jim_init ( MemoryRegion *parent, hwaddr offset,
 	return jim;
 }
 
-/** SHEILA */
-typedef struct {
-	/** Name */
-	const char *name;
-	/** Memory region */
-	MemoryRegion mr;
-	/** Unimplemented memory region */
-	BBCUnimplementedMemoryRegion unimp;
-	/** CRTC */
-	MC6845CRTC *crtc;
-	/** ACIA */
-	MC6850ACIA *acia;
-	/** Video ULA */
-	BBCVideoULA *video_ula;
-	/** Paged ROM */
-	BBCPagedROM *paged;
-	/** System VIA */
-	M6522VIA *system_via;
-	/** User VIA */
-	M6522VIA *user_via;
-} BBCSHEILA;
-
 /**
  * Initialise SHEILA
  *
  * @v parent		Parent memory region
  * @v offset		Offset within parent memory region
  * @v name		Device name
+ * @v irq		Interrupt request line
  * @ret sheila		SHEILA
  */
 static BBCSHEILA * bbc_sheila_init ( MemoryRegion *parent, hwaddr offset,
-				     const char *name, BBCPagedROM *paged ) {
+				     const char *name, BBCPagedROM *paged,
+				     qemu_irq irq ) {
 	BBCSHEILA *sheila = g_new0 ( BBCSHEILA, 1 );
 
 	/* Initialise SHEILA */
@@ -767,23 +697,75 @@ static BBCSHEILA * bbc_sheila_init ( MemoryRegion *parent, hwaddr offset,
 				    sheila->paged );
 
 	/* Initialise system and user VIAs */
-	sheila->system_via = m6522_init ( &sheila->mr,
-					  BBC_SHEILA_SYSTEM_VIA_BASE,
-					  BBC_SHEILA_SYSTEM_VIA_SIZE,
-					  "system_via", &bbc_system_via_ops,
-					  bbc_irq );
-	sheila->user_via = m6522_init ( &sheila->mr,
-					BBC_SHEILA_USER_VIA_BASE,
-					BBC_SHEILA_USER_VIA_SIZE,
-					"user_via", &bbc_user_via_ops,
-					bbc_irq );
+	sheila->system_via =
+		bbc_system_via_init ( &sheila->mr, BBC_SHEILA_SYSTEM_VIA_BASE,
+				      BBC_SHEILA_SYSTEM_VIA_SIZE,
+				      "system_via", irq );
+	sheila->user_via =
+		bbc_user_via_init ( &sheila->mr, BBC_SHEILA_USER_VIA_BASE,
+				    BBC_SHEILA_USER_VIA_SIZE,
+				    "user_via", irq );
 
 	return sheila;
 }
 
 /******************************************************************************
  *
- * Machine initialisation
+ * Interrupts
+ *
+ */
+
+/**
+ * IRQ handler
+ *
+ * @v opaque		BBC Micro
+ * @v n			Interrupt number
+ * @v level		Interrupt level
+ */
+static void bbc_irq_handler ( void *opaque, int n, int level ) {
+	BBCMicro *bbc = opaque;
+
+	/* Control CPU IRQ pin */
+	if ( level ) {
+		cpu_interrupt ( bbc->cpu, CPU_INTERRUPT_HARD );
+	} else {
+		cpu_reset_interrupt ( bbc->cpu, CPU_INTERRUPT_HARD );
+	}
+}
+
+/**
+ * NMI handler
+ *
+ * @v opaque		BBC Micro
+ * @v n			Interrupt number
+ * @v level		Interrupt level
+ */
+static void bbc_nmi_handler ( void *opaque, int n, int level ) {
+	BBCMicro *bbc = opaque;
+
+	/* Control CPU NMI pin */
+	if ( level ) {
+		cpu_interrupt ( bbc->cpu, CPU_INTERRUPT_NMI );
+	} else {
+		cpu_reset_interrupt ( bbc->cpu, CPU_INTERRUPT_NMI );
+	}
+}
+
+/**
+ * Initialise interrupts
+ *
+ * @v bbc		BBC Micro
+ */
+static void bbc_interrupts_init ( BBCMicro *bbc ) {
+
+	/* Allocate IRQ and NMI interrupts */
+	bbc->irq = qemu_allocate_irqs ( bbc_irq_handler, bbc, 1 )[0];
+	bbc->nmi = qemu_allocate_irqs ( bbc_nmi_handler, bbc, 1 )[0];
+}
+
+/******************************************************************************
+ *
+ * ROM loading
  *
  */
 
@@ -791,24 +773,29 @@ static BBCSHEILA * bbc_sheila_init ( MemoryRegion *parent, hwaddr offset,
  * Load ROM
  *
  * @v parent		Parent memory region
- * @v name		Name of memory region
+ * @v offset		Offset within parent memory region
+ * @v size		Size of memory region
+ * @v name		Name
  * @v filename		Filename
- * @v base		Base address within memory region
  * @v targphys		Base address within system memory
  * @v max_size		Maximum allowed size of ROM
+ * @ret rom		ROM
  */
-static void bbc_load_rom ( MemoryRegion *parent, const char *name,
-			   const char *filename, hwaddr base, hwaddr targphys,
-			   int max_size ) {
-	MemoryRegion *rom = g_new ( MemoryRegion, 1 );
+static BBCROM * bbc_load_rom ( MemoryRegion *parent, hwaddr offset,
+			       hwaddr size, const char *name,
+			       const char *filename, hwaddr targphys ) {
+	BBCROM *rom = g_new0 ( BBCROM, 1 );
 	const char *actual_filename;
-	int size;
+	int actual_size;
+
+	/* Initialise ROM */
+	rom->name = name;
 
 	/* Initialise memory region */
-	memory_region_init_ram ( rom, name, max_size );
-	vmstate_register_ram_global ( rom );
-	memory_region_set_readonly ( rom, true );
-	memory_region_add_subregion ( parent, base, rom );
+	memory_region_init_ram ( &rom->mr, name, size );
+	vmstate_register_ram_global ( &rom->mr );
+	memory_region_set_readonly ( &rom->mr, true );
+	memory_region_add_subregion ( parent, offset, &rom->mr );
 
 	/* Locate ROM file */
 	actual_filename = qemu_find_file ( QEMU_FILE_TYPE_BIOS, filename );
@@ -819,24 +806,28 @@ static void bbc_load_rom ( MemoryRegion *parent, const char *name,
 	}
 
 	/* Check size */
-	size = load_image_targphys ( actual_filename, targphys, max_size );
-	if ( size < 0 ) {
+	actual_size = load_image_targphys ( actual_filename, targphys, size );
+	if ( actual_size < 0 ) {
 		fprintf ( stderr, "qemu: could not load (or bad size) ROM "
 			  "'%s'\n", actual_filename );
 		exit ( 1 );
 	}
+
+	return rom;
 }
 
 /**
  * Load MOS ROM
  *
+ * @v parent		Parent memory region
+ * @v offset		Offset within parent memory region
+ * @v size		Size of memory region
  * @v default_filename	Default filename to use if none specified
- * @v base		Base address
- * @v max_size		Maximum allowed size of ROM
+ * @v targphys		Target physical address
+ * @ret rom		ROM
  */
-static void bbc_load_mos ( const char *default_filename, hwaddr base,
-			   int max_size ) {
-	MemoryRegion *address_space_mem = get_system_memory();
+static BBCROM * bbc_load_mos ( MemoryRegion *parent, hwaddr offset, hwaddr size,
+			       const char *default_filename, hwaddr targphys ) {
 	const char *name;
 
 	/* Use default filename if no 'BIOS' name is specified */
@@ -845,8 +836,7 @@ static void bbc_load_mos ( const char *default_filename, hwaddr base,
 
 	/* Load MOS ROM */
 	name = g_strdup_printf ( "mos %s", bios_name );
-	bbc_load_rom ( address_space_mem, name, bios_name, base, base,
-		       max_size );
+	return bbc_load_rom ( parent, offset, size, name, bios_name, targphys );
 }
 
 /**
@@ -869,12 +859,28 @@ static void bbc_load_paged_roms ( BBCPagedROM *paged,
 		filename = ( ( i == nb_option_roms ) ? basic_filename :
 			     option_rom[0].name );
 		name = g_strdup_printf ( "rom%d %s", page, filename );
-		bbc_load_rom ( &paged->roms, name, filename,
+		bbc_load_rom ( &paged->roms,
 			       bbc_paged_rom_offset ( paged, page ),
-			       bbc_paged_rom_targphys ( paged, page ),
-			       paged->size );
+			       paged->size, name, filename,
+			       bbc_paged_rom_targphys ( paged, page ) );
 	}
 }
+
+/******************************************************************************
+ *
+ * Machine initialisation
+ *
+ */
+
+/** BBC Micro state description */
+static const VMStateDescription vmstate_bbc = {
+	.name = "bbc",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_END_OF_LIST()
+	},
+};
 
 /**
  * Initialise BBC Model B
@@ -882,42 +888,47 @@ static void bbc_load_paged_roms ( BBCPagedROM *paged,
  * @v args		Machine arguments
  */
 static void bbcb_init ( QEMUMachineInitArgs *args ) {
+	BBCMicro *bbc = g_new0 ( BBCMicro, 1 );
 	const char *cpu_model = args->cpu_model;
-	CPUM6502State *env;
 	MemoryRegion *address_space_mem = get_system_memory();
-	MemoryRegion *ram = g_new ( MemoryRegion, 1 );
-	BBCPagedROM *paged;
+
+	/* Initialise machine */
+	bbc->name = "bbcb";
 
 	/* Initialise RAM */
-	memory_region_init_ram ( ram, "ram", BBC_B_RAM_SIZE );
-	vmstate_register_ram_global ( ram );
-	memory_region_add_subregion ( address_space_mem, BBC_B_RAM_BASE, ram );
+	memory_region_init_ram ( &bbc->ram, "ram", BBC_B_RAM_SIZE );
+	vmstate_register_ram_global ( &bbc->ram );
+	memory_region_add_subregion ( address_space_mem, BBC_B_RAM_BASE,
+				      &bbc->ram );
 
 	/* Initialise ROMs */
-	bbc_load_mos ( BBC_B_MOS_FILENAME, BBC_B_MOS_BASE, BBC_B_MOS_SIZE );
-	paged = bbc_paged_rom_init ( address_space_mem,
-				     BBC_PAGED_ROM_BASE, BBC_PAGED_ROM_SIZE,
-				     "paged_rom",
-				     BBC_PAGED_ROM_VIRTUAL_BASE,
-				     BBC_PAGED_ROM_VIRTUAL_BASE,
-				     BBC_PAGED_ROM_COUNT );
-	bbc_load_paged_roms ( paged, BBC_B_BASIC_FILENAME );
-
-	/* Initialise interrupts */
-	bbc_interrupts_init();
-
-	/* Initialise FRED, JIM, and SHEILA */
-	bbc_fred_init ( address_space_mem, BBC_FRED_BASE, "fred" );
-	bbc_jim_init ( address_space_mem, BBC_JIM_BASE, "jim" );
-	bbc_sheila_init ( address_space_mem, BBC_SHEILA_BASE, "sheila", paged );
+	bbc->mos = bbc_load_mos ( address_space_mem, BBC_B_MOS_BASE,
+				  BBC_B_MOS_SIZE, BBC_B_MOS_FILENAME,
+				  BBC_B_MOS_BASE );
+	bbc->paged = bbc_paged_rom_init ( address_space_mem,
+					  BBC_PAGED_ROM_BASE,
+					  BBC_PAGED_ROM_SIZE, "paged_rom",
+					  BBC_PAGED_ROM_VIRTUAL_BASE,
+					  BBC_PAGED_ROM_VIRTUAL_BASE,
+					  BBC_PAGED_ROM_COUNT );
+	bbc_load_paged_roms ( bbc->paged, BBC_B_BASIC_FILENAME );
 
 	/* Initialise CPU */
 	if ( cpu_model == NULL )
 		cpu_model = "6502";
-	env = m6502_init ( cpu_model );
+	bbc->cpu = m6502_init ( cpu_model );
+
+	/* Initialise interrupts */
+	bbc_interrupts_init ( bbc );
+
+	/* Initialise FRED, JIM, and SHEILA */
+	bbc->fred = bbc_fred_init ( address_space_mem, BBC_FRED_BASE, "fred" );
+	bbc->jim = bbc_jim_init ( address_space_mem, BBC_JIM_BASE, "jim" );
+	bbc->sheila = bbc_sheila_init ( address_space_mem, BBC_SHEILA_BASE,
+					"sheila", bbc->paged, bbc->irq );
 
 	/* Register virtual machine state */
-	vmstate_register ( NULL, 0, &vmstate_bbc, &bbc );
+	vmstate_register ( NULL, 0, &vmstate_bbc, bbc );
 }
 
 /** BBC Model B */

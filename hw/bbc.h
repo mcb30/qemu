@@ -73,4 +73,127 @@
 #define BBC_LATCH_CAPS_LOCK 6
 #define BBC_LATCH_SHIFT_LOCK 7
 
+/** Video ULA */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Memory region */
+	MemoryRegion mr;
+} BBCVideoULA;
+
+/** Paged ROM */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Paged ROM memory region */
+	MemoryRegion rom;
+	/** Paged ROM bank memory region */
+	MemoryRegion roms;
+	/** Paged ROM select register memory region */
+	MemoryRegion select;
+	/** Base target physical address */
+	hwaddr targphys;
+	/** Paged ROM size */
+	hwaddr size;
+	/** Number of paged ROMs */
+	unsigned int count;
+
+	/** Paged ROM select register */
+	uint8_t page;
+} BBCPagedROM;
+
+/** System VIA */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** 6522 VIA */
+	M6522VIA *via;
+	/** Addressable latch */
+	uint8_t addressable_latch;
+} BBCSystemVIA;
+
+/** User VIA */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** 6522 VIA */
+	M6522VIA *via;
+} BBCUserVIA;
+
+/** Unimplemented memory region */
+typedef struct {
+	/** Name */
+	const char *name;
+} BBCUnimplementedMemoryRegion;
+
+/** FRED */
+typedef struct {
+	/** Memory region */
+	MemoryRegion mr;
+	/** Unimplemented memory region */
+	BBCUnimplementedMemoryRegion unimp;	
+} BBCFRED;
+
+/** JIM */
+typedef struct {
+	/** Memory region */
+	MemoryRegion mr;
+	/** Unimplemented memory region */
+	BBCUnimplementedMemoryRegion unimp;	
+} BBCJIM;
+
+/** SHEILA */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Memory region */
+	MemoryRegion mr;
+	/** Unimplemented memory region */
+	BBCUnimplementedMemoryRegion unimp;
+	/** CRTC */
+	MC6845CRTC *crtc;
+	/** ACIA */
+	MC6850ACIA *acia;
+	/** Video ULA */
+	BBCVideoULA *video_ula;
+	/** Paged ROM */
+	BBCPagedROM *paged;
+	/** System VIA */
+	BBCSystemVIA *system_via;
+	/** User VIA */
+	BBCUserVIA *user_via;
+} BBCSHEILA;
+
+/** BBC ROM */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Memory region */
+	MemoryRegion mr;
+} BBCROM;
+
+/** BBC Micro */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** CPU */
+	CPUM6502State *cpu;
+	/** RAM */
+	MemoryRegion ram;
+	/** MOS ROM */
+	BBCROM *mos;
+	/** Paged ROM */
+	BBCPagedROM *paged;
+	/** Maskable interrupt */
+	qemu_irq irq;
+	/** Non-maskable interrupt */
+	qemu_irq nmi;
+	/** FRED */
+	BBCFRED *fred;
+	/** JIM */
+	BBCJIM *jim;
+	/** SHEILA */
+	BBCSHEILA *sheila;
+} BBCMicro;
+
 #endif
