@@ -22,6 +22,7 @@
 #include "exec/address-spaces.h"
 #include "sysemu/sysemu.h"
 #include "ui/console.h"
+#include "vga_int.h"
 #include "bbc.h"
 
 #define DEBUG_CRT 1
@@ -225,11 +226,29 @@ static void bbc_crt_invalidate ( void *opaque ) {
 	LOG_CRT ( "%s: invalidate\n", crt->name );
 }
 
+/**
+ * Create a screen dump
+ *
+ * @v opaque		BBC display
+ * @v filename		Filename
+ * @v cswitch		Console is not currently displayed
+ * @ret errp		Error pointer
+ */
 static void bbc_crt_screen_dump ( void *opaque, const char *filename,
 				  bool cswitch, Error **errp ) {
 	BBCDisplay *crt = opaque;
 
 	LOG_CRT ( "%s: screen dump\n", crt->name );
+
+	/* Invalidate display if currently displaying a different console */
+	if ( cswitch )
+		bbc_crt_invalidate ( crt );
+
+	/* Update display */
+	bbc_crt_update ( crt );
+
+	/* Dump display to PPM file */
+	ppm_save ( filename, crt->ds->surface, errp );
 }
 
 /**
