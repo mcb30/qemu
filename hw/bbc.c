@@ -351,6 +351,9 @@ static void bbc_paged_rom_select_init ( MemoryRegion *parent, hwaddr offset,
  *
  */
 
+/** Startup DIP switches */
+static const uint8_t bbc_startup = 0x00;
+
 /**
  * Check if currently-selected key is pressed
  *
@@ -365,11 +368,17 @@ static int bbc_keyboard_pressed ( uint8_t data ) {
 	/* Calculate row (PA6:4) and column (PA3:0) addresses */
 	row = ( ( data >> 4 ) & 0x07 );
 	column = ( ( data >> 0 ) & 0x0f );
-	pressed = 0;
+
+	/* Startup DIP switches are mapped to row 0 columns 2-9 */
+	if ( ( row == 0 ) && ( column >= 2 ) ) {
+		pressed = ( ( bbc_startup >> ( 9 - column ) ) & 0x01 );
+	} else {
+		pressed = 0;
+	}
 
 	qemu_log_mask ( CPU_LOG_IOPORT, "BBC: keyboard column %d row %d %s\n",
 			column, row, ( pressed ? "pressed" : "not pressed" ) );
-	return 0;
+	return pressed;
 }
 
 /**
