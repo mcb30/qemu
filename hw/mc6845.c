@@ -63,7 +63,7 @@ static uint64_t mc6845_read ( void *opaque, hwaddr addr, unsigned int size ) {
 	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from "
 				"reg 0x%02x\n", crtc->name, crtc->address );
-		data = 0;
+		data = 0xff;
 		break;
 	}
 	return data;

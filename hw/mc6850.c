@@ -32,6 +32,56 @@
 	} while ( 0 )
 
 /**
+ * Write to ACIA control register
+ *
+ * @v acia		6850 ACIA
+ * @v data		Data
+ */
+static void mc6850_control_write ( MC6850ACIA *acia, uint8_t data ) {
+
+	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented control write 0x%02x\n",
+			acia->name, data );
+}
+
+/**
+ * Read from ACIA status register
+ *
+ * @v acia		6850 ACIA
+ * @ret data		Data
+ */
+static uint8_t mc6850_status_read ( MC6850ACIA *acia ) {
+
+	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented status read\n",
+			acia->name );
+	return 0;
+}
+
+/**
+ * Write to ACIA data register
+ *
+ * @v acia		6850 ACIA
+ * @v data		Data
+ */
+static void mc6850_data_write ( MC6850ACIA *acia, uint8_t data ) {
+
+	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented data write 0x%02x\n",
+			acia->name, data );
+}
+
+/**
+ * Read from ACIA data register
+ *
+ * @v acia		6850 ACIA
+ * @ret data		Data
+ */
+static uint8_t mc6850_data_read ( MC6850ACIA *acia ) {
+
+	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented data read\n",
+			acia->name );
+	return 0;
+}
+
+/**
  * Read from 6850 ACIA
  *
  * @v opaque		6850 ACIA
@@ -45,10 +95,16 @@ static uint64_t mc6850_read ( void *opaque, hwaddr addr, unsigned int size ) {
 
 	/* Read from specified register */
 	switch ( addr & ( MC6850_SIZE - 1 ) ) {
+	case MC6850_STATUS:
+		data = mc6850_status_read ( acia );
+		break;
+	case MC6850_DATA:
+		data = mc6850_data_read ( acia );
+		break;
 	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from "
 				"0x%02lx\n", acia->name, addr );
-		data = 0;
+		data = 0xff;
 		break;
 	}
 	return data;
@@ -69,6 +125,12 @@ static void mc6850_write ( void *opaque, hwaddr addr, uint64_t data64,
 
 	/* Write to specified register */
 	switch ( addr & ( MC6850_SIZE - 1 ) ) {
+	case MC6850_CONTROL:
+		mc6850_control_write ( acia, data );
+		break;
+	case MC6850_DATA:
+		mc6850_data_write ( acia, data );
+		break;
 	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to "
 				"0x%02lx\n", acia->name, data, addr );

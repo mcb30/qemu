@@ -280,9 +280,6 @@ static void bbc_crt_update_character ( BBCDisplay *crt,
 	void *row_dest;
 	void *pixel_dest;
 
-	LOG_CRT ( "%s: redrawing CRTC character (%02d,%02d)\n",
-		  crt->name, column, row );
-
 	/* Calculate number of scan lines */
 	scan_lines = ( crtc->max_scan_line + 1 );
 	if ( scan_lines > BBC_CRT_CHAR_MAX_SCAN_LINES )
@@ -386,7 +383,7 @@ static void bbc_crt_update_region ( BBCDisplay *crt,
 		vram_addr = ( addr - crt->start );
 		size = ( next - addr );
 
-		/* Redraw this sub-region, if applicable */
+		/* Update this subregion, if applicable */
 		if ( crt->invalid ||
 		     memory_region_get_dirty ( &crt->vram, vram_addr, size,
 					       DIRTY_MEMORY_VGA ) ) {
@@ -395,9 +392,13 @@ static void bbc_crt_update_region ( BBCDisplay *crt,
 			memory_region_reset_dirty ( &crt->vram, vram_addr, size,
 						    DIRTY_MEMORY_VGA );
 
-			/* Redraw each character */
+			/* Calculate starting row and column address */
 			row = ( offset / horiz_displayed );
 			column = ( offset % horiz_displayed );
+			LOG_CRT ( "%s: updating [&%04lX,&%04lX) at (%d,%d)\n",
+				  crt->name, addr, ( next - 1 ), column, row );
+
+			/* Redraw each character in subregion */
 			while ( addr < next ) {
 				bbc_crt_update_character ( crt, region, row,
 							   column,
@@ -406,12 +407,12 @@ static void bbc_crt_update_region ( BBCDisplay *crt,
 				addr += step;
 				vram_addr += step;
 				offset++;
-				column++;
-				if ( column == horiz_displayed ) {
+				if ( ++column == horiz_displayed ) {
 					row++;
 					column = 0;
 				}
 			}
+
 		} else {
 
 			/* Skip this sub-region */

@@ -43,7 +43,7 @@ static uint64_t bbc_video_ula_read ( void *opaque, hwaddr addr,
 				     unsigned int size ) {
 
 	/* These are write-only registers */
-	return 0;
+	return 0xff;
 }
 
 /**
@@ -227,7 +227,7 @@ static uint64_t bbc_paged_rom_select_read ( void *opaque, hwaddr addr,
 					    unsigned int size ) {
 
 	/* This is a write-only register */
-	return 0;
+	return 0xff;
 }
 
 /**
