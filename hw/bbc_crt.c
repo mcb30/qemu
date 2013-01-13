@@ -129,6 +129,9 @@ static void bbc_crt_vram_update ( BBCDisplay *crt ) {
 	crt->crtc_start = crtc_start;
 	crt->crtc_count = crtc_count;
 
+	/* Mark display as invalid */
+	crt->invalid = 1;
+
 	/* Calculate transition CRTC address, i.e. the first address
 	 * after crtc_start with a different value for MA12.  Note
 	 * that (a) this address may exceed the 14-bit address range
@@ -237,6 +240,9 @@ static void bbc_crt_resize ( BBCDisplay *crt ) {
 	crt->width = width;
 	crt->height = height;
 
+	/* Mark display as invalid */
+	crt->invalid = 1;
+
 	/* Resize displayed image */
 	if ( crt->image ) {
 		pixman_image_unref ( crt->image );
@@ -254,9 +260,6 @@ static void bbc_crt_resize ( BBCDisplay *crt ) {
 
 	/* Resize graphic console */
 	qemu_console_resize ( crt->ds, crt->width, crt->height );
-
-	/* Mark display as invalid */
-	crt->invalid = 1;
 }
 
 /**
