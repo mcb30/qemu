@@ -314,7 +314,6 @@ static void bbc_crt_update_character ( BBCDisplay *crt,
 	/* Calculate starting address within image */
 	x = ( column << ( pixels_log2 + pixel_width_log2 ) );
 	y = ( ( row * ( crtc->max_scan_line + 1 ) ) << pixel_height_doubled );
-	LOG_CRT ( "...host (%d,%d)\n", x, y );
 	image_data = pixman_image_get_data ( crt->image );
 	row_dest = ( image_data + ( y * crt->width ) + x );
 
@@ -324,18 +323,12 @@ static void bbc_crt_update_character ( BBCDisplay *crt,
 		/* Read data */
 		byte = data[scan_line];
 
-		LOG_CRT ( "...byte %02x\n", byte );
-
 		/* Process each pixel in turn */
 		pixel_dest = row_dest;
 		for ( pixel = 0 ; pixel < pixels ; pixel++ ) {
 
 			/* Extract pixel value from bits {7,5,3,1} */
 			colour = ( byte & 0xcc );
-
-			LOG_CRT ( "...offset %04lx+%x set to %02x\n",
-				  ( pixel_dest - (void*) pixman_image_get_data ( crt->image ) ),
-				  pixel_width, colour );
 
 			/* Fill image */
 			memset ( pixel_dest, colour, pixel_width );
