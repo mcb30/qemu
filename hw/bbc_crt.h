@@ -55,6 +55,9 @@
 /** CRTC address bit 13 selects teletext address translation */
 #define BBC_CRTC_ADDR_TELETEXT ( 1 << 13 )
 
+/** Indexed bitmap pixel format */
+#define BBC_CRT_PIXMAN_FORMAT PIXMAN_c8
+
 /**
  * A BBC Micro display region
  *
@@ -95,8 +98,6 @@ typedef struct {
 	BBCVideoULA *ula;
 	/** System VIA */
 	BBCSystemVIA *via;
-	/** Graphical console */
-	DisplayState *ds;
 
 	/** Display region prior to wrap-around */
 	BBCDisplayRegion first;
@@ -106,6 +107,17 @@ typedef struct {
 	hwaddr start;
 	/** Size of video RAM */
 	unsigned int size;
+	/** Width of display (in pixels) */
+	unsigned int width;
+	/** Height of display (in pixels) */
+	unsigned int height;
+
+	/** Displayed area image */
+	pixman_image_t *image;
+	/** Bitmap is invalid */
+	int invalid;
+	/** Graphical console */
+	DisplayState *ds;
 } BBCDisplay;
 
 extern BBCDisplay * bbc_crt_init ( const char *name, MemoryRegion *parent,

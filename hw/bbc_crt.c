@@ -35,6 +35,15 @@
 	} while ( 0 )
 
 /**
+ * Bitmap colour index
+ *
+ * We use a single static structure rather than dynamically allocating
+ * one each time we need it, since the reverse lookup array (ent[]) is
+ * large.
+ */
+static pixman_indexed_t bbc_crt_pixman_indexed;
+
+/**
  * Translate a CRTC address into a video RAM address
  *
  * @v crt		BBC display
@@ -156,25 +165,6 @@ static void bbc_crt_vram_update ( BBCDisplay *crt ) {
 		~( BBC_CRT_VIDEO_RAM_ALIGN - 1 ) );
 	size = ( end - start );
 
-	/* Update video RAM memory region */
-	if ( ( start != crt->start ) || ( size != crt->size ) ) {
-
-		/* Destroy existing memory region */
-		memory_region_del_subregion ( crt->ram, &crt->vram );
-		memory_region_destroy ( &crt->vram );
-
-		/* Create new memory region */
-		parent_ptr = memory_region_get_ram_ptr ( crt->ram );
-		memory_region_init_ram_ptr ( &crt->vram, "vram", size,
-					     ( parent_ptr + start ) );
-		memory_region_add_subregion ( crt->ram, start, &crt->vram );
-		memory_region_set_log ( &crt->vram, true, DIRTY_MEMORY_VGA );
-
-		/* Record new region bounds */
-		crt->start = start;
-		crt->size = size;
-	}
-
 	/* Debug output */
 	LOG_CRT ( "%s: [&%04lx,&%04lx) regions [&%04lX,&%04lX) %s",
 		  crt->name, crt->start, ( crt->start + crt->size - 1 ),
@@ -187,6 +177,25 @@ static void bbc_crt_vram_update ( BBCDisplay *crt ) {
 			  ( crt->second.teletext ? "teletext" : "graphic" ) );
 	}
 	LOG_CRT ( "\n" );
+
+	/* Do nothing more unless screen memory bounds have changed */
+	if ( ( start == crt->start ) && ( size == crt->size ) )
+		return;
+
+	/* Record new region bounds */
+	crt->start = start;
+	crt->size = size;
+
+	/* Destroy existing memory region */
+	memory_region_del_subregion ( crt->ram, &crt->vram );
+	memory_region_destroy ( &crt->vram );
+
+	/* Create new memory region */
+	parent_ptr = memory_region_get_ram_ptr ( crt->ram );
+	memory_region_init_ram_ptr ( &crt->vram, "vram", size,
+				     ( parent_ptr + start ) );
+	memory_region_add_subregion ( crt->ram, start, &crt->vram );
+	memory_region_set_log ( &crt->vram, true, DIRTY_MEMORY_VGA );
 }
 
 /**
@@ -206,9 +215,41 @@ static void bbc_crt_resize ( BBCDisplay *crt ) {
 	if ( ! ( crt->crtc->interlace && crt->crtc->interlace_video ) )
 		height <<= 1;
 
-	/* Resize display */
+	/* Do nothing more unless display geometry has changed */
+	if ( ( width == crt->width ) && ( height == crt->height ) )
+		return;
+
+	/* Record new display geometry */
+	crt->width = width;
+	crt->height = height;
+
+	/* Resize displayed image */
+	if ( crt->image ) {
+		pixman_image_unref ( crt->image );
+		crt->image = NULL;
+	}
+	if ( width && height ) {
+		crt->image = pixman_image_create_bits ( BBC_CRT_PIXMAN_FORMAT,
+							width, height, NULL,
+							width );
+		assert ( crt->image != NULL );
+		bbc_crt_pixman_indexed.color = true;
+		pixman_image_set_indexed ( crt->image,
+					   &bbc_crt_pixman_indexed );
+	}
+
+	/* Resize graphic console */
 	qemu_console_resize ( crt->ds, width, height );
+
+	/* Mark display as invalid */
+	crt->invalid = 1;
 }
+
+/**
+ * Update display
+ *
+ * @v opaque		BBC display
+ */
 
 static void bbc_crt_update ( void *opaque ) {
 	BBCDisplay *crt = opaque;
@@ -217,13 +258,35 @@ static void bbc_crt_update ( void *opaque ) {
 	bbc_crt_vram_update ( crt );
 	bbc_crt_resize ( crt );
 
-	LOG_CRT ( "%s: update\n", crt->name );
+	//
+	bbc_crt_pixman_indexed.rgba[0] = 0x000000;
+	bbc_crt_pixman_indexed.rgba[1] = 0xff0000;
+	bbc_crt_pixman_indexed.rgba[2] = 0x00ff00;
+	bbc_crt_pixman_indexed.rgba[3] = 0x0000ff;
+	if ( crt->image ) {
+
+		uint32_t *foo = pixman_image_get_data ( crt->image );
+		unsigned int i;
+		for ( i = 0 ; i < ( 640 * 8 ) ; i++ )
+			foo[i] = 0x01010202;
+
+		pixman_image_composite ( PIXMAN_OP_SRC, crt->image, NULL,
+					 crt->ds->surface->image, 0, 0, 0, 0,
+					 0, 0, crt->width, crt->height );
+		dpy_gfx_update ( crt->ds, 0, 0, crt->width, crt->height );
+	}
 }
 
+/**
+ * Invalidate display
+ *
+ * @v opaque		BBC display
+ */
 static void bbc_crt_invalidate ( void *opaque ) {
 	BBCDisplay *crt = opaque;
 
-	LOG_CRT ( "%s: invalidate\n", crt->name );
+	/* Mark display as invalid */
+	crt->invalid = 1;
 }
 
 /**
@@ -237,8 +300,6 @@ static void bbc_crt_invalidate ( void *opaque ) {
 static void bbc_crt_screen_dump ( void *opaque, const char *filename,
 				  bool cswitch, Error **errp ) {
 	BBCDisplay *crt = opaque;
-
-	LOG_CRT ( "%s: screen dump\n", crt->name );
 
 	/* Invalidate display if currently displaying a different console */
 	if ( cswitch )
@@ -273,15 +334,15 @@ BBCDisplay * bbc_crt_init ( const char *name, MemoryRegion *ram,
 	crt->ula = ula;
 	crt->via = via;
 
-	/* Initialise graphic console */
-	crt->ds = graphic_console_init ( bbc_crt_update,
-					 bbc_crt_invalidate,
-					 bbc_crt_screen_dump, NULL, crt );
-
 	/* Initialise a dummy video RAM memory region */
 	memory_region_init ( &crt->vram, "vram", 0 );
 	memory_region_add_subregion ( crt->ram, 0, &crt->vram );
 	memory_region_set_enabled ( &crt->vram, false );
+
+	/* Initialise graphic console */
+	crt->ds = graphic_console_init ( bbc_crt_update,
+					 bbc_crt_invalidate,
+					 bbc_crt_screen_dump, NULL, crt );
 
 	return crt;
 }
