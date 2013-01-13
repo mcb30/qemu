@@ -88,13 +88,10 @@ typedef struct {
 
 	/** Cursor segment mask (4 bits) */
 	uint8_t cursor_mask;
-	/** 6845 CRTC 2MHz/1MHz clock select */
-	uint8_t crtc_clock_fast;
-	/** Number of columns / pixel rate
-	 *
-	 * Pixel clock is (2<<pixel_clock) MHz
-	 */
-	uint8_t pixel_clock_shift;
+	/** 6845 CRTC clock (in log2(MHz)) */
+	uint8_t crtc_clock_log2;
+	/** Pixel clock (in log2(MHz)) */
+	uint8_t pixel_clock_log2;
 	/** Teletext enabled */
 	uint8_t teletext;
 	/** Invert flashing colours */
@@ -102,30 +99,6 @@ typedef struct {
 	/** Palette */
 	uint8_t palette[16];
 } BBCVideoULA;
-
-/**
- * Calculate CRTC clock rate (in MHz)
- *
- * @v ula		Video ULA
- * @ret clock		Clock rate (in MHz)
- */
-static inline unsigned int bbc_video_ula_crtc_clock ( BBCVideoULA *ula ) {
-
-	/* CRTC clock is either 2MHz (fast) or 1MHz (slow) */
-	return ( ula->crtc_clock_fast ? 2 : 1 );
-}
-
-/**
- * Calculate pixel clock rate (in MHz)
- *
- * @v ula		Video ULA
- * @ret clock		Clock rate (in MHz)
- */
-static inline unsigned int bbc_video_ula_pixel_clock ( BBCVideoULA *ula ) {
-
-	/* Pixel clock is (2<<pixel_clock)MHz */
-	return ( 2 << ula->pixel_clock_shift );
-}
 
 /**
  * Paged ROM

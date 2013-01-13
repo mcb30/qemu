@@ -132,8 +132,9 @@ static void bbc_crt_vram_update ( BBCDisplay *crt ) {
 	first_count = ( crtc_transition - crtc->start );
 	if ( first_count > screen_count )
 		first_count = screen_count;
-	crt->first.size = ( crt->first.teletext ? first_count :
-			    ( first_count * BBC_CRT_CHAR_SIZE ) );
+	crt->first.size = ( first_count << ( crt->first.teletext ? 0 :
+					     BBC_CRT_CHAR_SIZE_LOG2 ) );
+	crt->first.before_count = 0;
 
 	/* Calculate start address and translation for second display region */
 	if ( first_count < screen_count ) {
@@ -141,12 +142,15 @@ static void bbc_crt_vram_update ( BBCDisplay *crt ) {
 		crt->second.start = bbc_crt_translate ( crt, crtc_transition,
 							&crt->second.teletext );
 		second_count = ( screen_count - first_count );
-		crt->second.size = ( crt->second.teletext ? second_count :
-				     ( second_count * BBC_CRT_CHAR_SIZE ) );
+		crt->second.size =
+			( second_count << ( crt->second.teletext ? 0 :
+					    BBC_CRT_CHAR_SIZE_LOG2 ) );
+		crt->second.before_count = first_count;
 	} else {
 		/* No second region */
 		crt->second.start = 0;
 		crt->second.size = 0;
+		crt->second.before_count = 0;
 		crt->second.teletext = false;
 	}
 
@@ -167,7 +171,7 @@ static void bbc_crt_vram_update ( BBCDisplay *crt ) {
 
 	/* Debug output */
 	LOG_CRT ( "%s: [&%04lx,&%04lx) regions [&%04lX,&%04lX) %s",
-		  crt->name, crt->start, ( crt->start + crt->size - 1 ),
+		  crt->name, start, ( start + size - 1 ),
 		  crt->first.start, ( crt->first.start + crt->first.size - 1 ),
 		  ( crt->first.teletext ? "teletext" : "graphic" ) );
 	if ( crt->second.size ) {
@@ -208,8 +212,8 @@ static void bbc_crt_resize ( BBCDisplay *crt ) {
 	unsigned int height;
 
 	/* Calculate display geometry */
-	width = ( ( crt->crtc->horiz_displayed * BBC_CRT_PIXEL_CLOCK ) /
-		  bbc_video_ula_crtc_clock ( crt->ula ) );
+	width = ( crt->crtc->horiz_displayed <<
+		  ( BBC_CRT_PIXEL_CLOCK_LOG2 - crt->ula->crtc_clock_log2 ) );
 	height = ( crt->crtc->vert_displayed *
 		   ( crt->crtc->max_scan_line + 1 ) );
 	if ( ! ( crt->crtc->interlace && crt->crtc->interlace_video ) )
@@ -228,10 +232,10 @@ static void bbc_crt_resize ( BBCDisplay *crt ) {
 		pixman_image_unref ( crt->image );
 		crt->image = NULL;
 	}
-	if ( width && height ) {
-		crt->image = pixman_image_create_bits ( BBC_CRT_PIXMAN_FORMAT,
-							width, height, NULL,
-							width );
+	if ( crt->width && crt->height ) {
+		crt->image = pixman_image_create_bits ( BBC_CRT_IMAGE_FORMAT,
+							crt->width, crt->height,
+							NULL, 0 );
 		assert ( crt->image != NULL );
 		bbc_crt_pixman_indexed.color = true;
 		pixman_image_set_indexed ( crt->image,
@@ -239,10 +243,188 @@ static void bbc_crt_resize ( BBCDisplay *crt ) {
 	}
 
 	/* Resize graphic console */
-	qemu_console_resize ( crt->ds, width, height );
+	qemu_console_resize ( crt->ds, crt->width, crt->height );
 
 	/* Mark display as invalid */
 	crt->invalid = 1;
+}
+
+/**
+ * Update character
+ *
+ * @v crt		BBC display
+ * @v region		Display region
+ * @v row		CRTC character row
+ * @v column		CRTC character column
+ * @v data		Character data
+ */
+static void bbc_crt_update_character ( BBCDisplay *crt,
+				       BBCDisplayRegion *region,
+				       unsigned int row, unsigned int column,
+				       uint8_t *data ) {
+	BBCVideoULA *ula = crt->ula;
+	MC6845CRTC *crtc = crt->crtc;
+	unsigned int scan_lines;
+	unsigned int pixels_log2;
+	unsigned int pixels;
+	unsigned int pixel_width_log2;
+	unsigned int pixel_width;
+	unsigned int pixel_height_doubled;
+	unsigned int x;
+	unsigned int y;
+	unsigned int scan_line;
+	unsigned int pixel;
+	uint8_t byte;
+	uint8_t colour;
+	void *image_data;
+	void *row_dest;
+	void *pixel_dest;
+
+	LOG_CRT ( "%s: redrawing CRTC character (%02d,%02d)\n",
+		  crt->name, column, row );
+
+	/* Calculate number of scan lines */
+	scan_lines = ( crtc->max_scan_line + 1 );
+	if ( scan_lines > BBC_CRT_CHAR_MAX_SCAN_LINES )
+		scan_lines = BBC_CRT_CHAR_MAX_SCAN_LINES;
+
+	/* Calculate character width in BBC pixels, as the pixel clock
+	 * divided by the CRTC clock.  Note that the pixel clock can
+	 * never be slower than the CRTC clock, so the left shift can
+	 * never be negative (and hence invalid).
+	 */
+	pixels_log2 = ( ula->pixel_clock_log2 - ula->crtc_clock_log2 );
+	pixels = ( 1 << pixels_log2 );
+
+	/* Calculate width of each BBC pixel in host pixels, as the
+	 * nominal CRT pixel clock divided by the (BBC) pixel clock.
+	 * Note that the pixel clock can never be slower than the
+	 * nominal CRT pixel clock, so the left shift can never be
+	 * negative (and hence invalid).
+	 */
+	pixel_width_log2 = ( BBC_CRT_PIXEL_CLOCK_LOG2 - ula->pixel_clock_log2 );
+	pixel_width = ( 1 << pixel_width_log2 );
+
+	/* Determine whether or not pixels are double-height
+	 * (i.e. interlace disabled, or interlace sync without video).
+	 */
+	pixel_height_doubled = ( ! ( crt->crtc->interlace &&
+				     crt->crtc->interlace_video ) );
+
+	/* Calculate starting address within image */
+	x = ( column << ( pixels_log2 + pixel_width_log2 ) );
+	y = ( ( row * ( crtc->max_scan_line + 1 ) ) << pixel_height_doubled );
+	LOG_CRT ( "...host (%d,%d)\n", x, y );
+	image_data = pixman_image_get_data ( crt->image );
+	row_dest = ( image_data + ( y * crt->width ) + x );
+
+	/* Process each scan line in turn */
+	for ( scan_line = 0 ; scan_line < scan_lines ; scan_line++ ) {
+
+		/* Read data */
+		byte = data[scan_line];
+
+		LOG_CRT ( "...byte %02x\n", byte );
+
+		/* Process each pixel in turn */
+		pixel_dest = row_dest;
+		for ( pixel = 0 ; pixel < pixels ; pixel++ ) {
+
+			/* Extract pixel value from bits {7,5,3,1} */
+			colour = ( byte & 0xcc );
+
+			LOG_CRT ( "...offset %04lx+%x set to %02x\n",
+				  ( pixel_dest - (void*) pixman_image_get_data ( crt->image ) ),
+				  pixel_width, colour );
+
+			/* Fill image */
+			memset ( pixel_dest, colour, pixel_width );
+			if ( pixel_height_doubled ) {
+				memset ( pixel_dest + crt->width, colour,
+					 pixel_width );
+			}
+			pixel_dest += pixel_width;
+
+			/* Left shift, injecting ones */
+			byte = ( ( byte << 1 ) | 0x01 );
+		}
+
+		/* Move to next row */
+		row_dest += ( crt->width << pixel_height_doubled );
+	}
+}
+
+/**
+ * Update display region
+ *
+ * @v crt		BBC display
+ * @v region		Display region
+ */
+static void bbc_crt_update_region ( BBCDisplay *crt,
+				    BBCDisplayRegion *region ) {
+	hwaddr addr;
+	hwaddr end;
+	hwaddr next;
+	hwaddr vram_addr;
+	uint8_t *vram_ptr;
+	unsigned int offset;
+	unsigned int size;
+	unsigned int step_shift;
+	unsigned int step;
+	unsigned int horiz_displayed;
+	unsigned int row;
+	unsigned int column;
+
+	/* Get direct pointer to video RAM */
+	vram_ptr = memory_region_get_ram_ptr ( &crt->vram );
+
+	/* Scan through region looking for dirty pages */
+	end = ( region->start + region->size );
+	offset = ( region->before_count );
+	step_shift = ( region->teletext ? 0 : BBC_CRT_CHAR_SIZE_LOG2 );
+	step = ( 1 << step_shift );
+	horiz_displayed = crt->crtc->horiz_displayed;
+	for ( addr = region->start ; addr < end ; addr = next ) {
+
+		/* Find end of this page (or end of region, if sooner) */
+		next = TARGET_PAGE_ALIGN ( addr + 1 );
+		if ( next > end )
+			next = end;
+		vram_addr = ( addr - crt->start );
+		size = ( next - addr );
+
+		/* Redraw this sub-region, if applicable */
+		if ( crt->invalid ||
+		     memory_region_get_dirty ( &crt->vram, vram_addr, size,
+					       DIRTY_MEMORY_VGA ) ) {
+
+			/* Mark region as clean */
+			memory_region_reset_dirty ( &crt->vram, vram_addr, size,
+						    DIRTY_MEMORY_VGA );
+
+			/* Redraw each character */
+			row = ( offset / horiz_displayed );
+			column = ( offset % horiz_displayed );
+			while ( addr < next ) {
+				bbc_crt_update_character ( crt, region, row,
+							   column,
+							   ( vram_ptr +
+							     vram_addr ) );
+				addr += step;
+				vram_addr += step;
+				offset++;
+				column++;
+				if ( column == horiz_displayed ) {
+					row++;
+					column = 0;
+				}
+			}
+		} else {
+
+			/* Skip this sub-region */
+			offset += ( size >> step_shift );
+		}
+	}
 }
 
 /**
@@ -250,7 +432,6 @@ static void bbc_crt_resize ( BBCDisplay *crt ) {
  *
  * @v opaque		BBC display
  */
-
 static void bbc_crt_update ( void *opaque ) {
 	BBCDisplay *crt = opaque;
 
@@ -258,23 +439,32 @@ static void bbc_crt_update ( void *opaque ) {
 	bbc_crt_vram_update ( crt );
 	bbc_crt_resize ( crt );
 
+	/* Do nothing unless we have an image */
+	if ( ! crt->image )
+		return;
+
 	//
-	bbc_crt_pixman_indexed.rgba[0] = 0x000000;
-	bbc_crt_pixman_indexed.rgba[1] = 0xff0000;
-	bbc_crt_pixman_indexed.rgba[2] = 0x00ff00;
-	bbc_crt_pixman_indexed.rgba[3] = 0x0000ff;
-	if ( crt->image ) {
+	crt->invalid = 1;
 
-		uint32_t *foo = pixman_image_get_data ( crt->image );
-		unsigned int i;
-		for ( i = 0 ; i < ( 640 * 8 ) ; i++ )
-			foo[i] = 0x01010202;
+	/* Update both regions */
+	bbc_crt_update_region ( crt, &crt->first );
+	bbc_crt_update_region ( crt, &crt->second );
 
-		pixman_image_composite ( PIXMAN_OP_SRC, crt->image, NULL,
-					 crt->ds->surface->image, 0, 0, 0, 0,
-					 0, 0, crt->width, crt->height );
-		dpy_gfx_update ( crt->ds, 0, 0, crt->width, crt->height );
+	/* Mark display as valid */
+	crt->invalid = 0;
+
+
+	//
+	unsigned int i;
+	for ( i = 0 ; i < 256 ; i++ ) {
+		bbc_crt_pixman_indexed.rgba[i] =
+			( ( i & 0x80 ) ? 0xffffff : 0x000000 );
 	}
+
+	pixman_image_composite ( PIXMAN_OP_SRC, crt->image, NULL,
+				 crt->ds->surface->image, 0, 0, 0, 0,
+				 0, 0, crt->width, crt->height );
+	dpy_gfx_update ( crt->ds, 0, 0, crt->width, crt->height );
 }
 
 /**

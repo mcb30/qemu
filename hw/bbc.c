@@ -59,8 +59,8 @@ static void bbc_video_ula_control_write ( BBCVideoULA *ula, uint8_t data ) {
 			     ( ( ( data >> 6 ) & 0x01 ) << 1 ) |
 			     ( ( ( data >> 5 ) & 0x01 ) << 2 ) |
 			     ( ( ( data >> 5 /* sic */ ) & 1 ) << 3 ) );
-	ula->crtc_clock_fast = ( ( data >> 4 ) & 0x01 );
-	ula->pixel_clock_shift = ( ( data >> 2 ) & 0x03 );
+	ula->crtc_clock_log2 = ( ( data >> 4 ) & 0x01 );
+	ula->pixel_clock_log2 = ( ( ( data >> 2 ) & 0x03 ) + 1 );
 	ula->teletext = ( ( data >> 1 ) & 0x01 );
 	ula->flash = ( ( data >> 0 ) & 0x01 );
 	qemu_log_mask ( CPU_LOG_IOPORT, "%s: cursor mask %c%c%c%c CRTC %dMHz "
@@ -69,8 +69,8 @@ static void bbc_video_ula_control_write ( BBCVideoULA *ula, uint8_t data ) {
 			( ( ula->cursor_mask & 0x02 ) ? 'X' : '-' ),
 			( ( ula->cursor_mask & 0x04 ) ? 'X' : '-' ),
 			( ( ula->cursor_mask & 0x08 ) ? 'X' : '-' ),
-			bbc_video_ula_crtc_clock ( ula ),
-			bbc_video_ula_pixel_clock ( ula ),
+			( 1 << ula->crtc_clock_log2 ),
+			( 1 << ula->pixel_clock_log2 ),
 			( ula->teletext ? " teletext" : "" ),
 			( ula->flash ? " flash" : "" ) );
 }
@@ -135,8 +135,8 @@ static const VMStateDescription vmstate_bbc_video_ula = {
 	.minimum_version_id = 1,
 	.fields = ( VMStateField[] ) {
 		VMSTATE_UINT8 ( cursor_mask, BBCVideoULA ),
-		VMSTATE_UINT8 ( crtc_clock_fast, BBCVideoULA ),
-		VMSTATE_UINT8 ( pixel_clock_shift, BBCVideoULA ),
+		VMSTATE_UINT8 ( crtc_clock_log2, BBCVideoULA ),
+		VMSTATE_UINT8 ( pixel_clock_log2, BBCVideoULA ),
 		VMSTATE_UINT8 ( teletext, BBCVideoULA ),
 		VMSTATE_UINT8 ( flash, BBCVideoULA ),
 		VMSTATE_UINT8_ARRAY ( palette, BBCVideoULA, 16 ),
@@ -352,7 +352,7 @@ static void bbc_paged_rom_select_init ( MemoryRegion *parent, hwaddr offset,
  */
 
 /** Startup DIP switches */
-static const uint8_t bbc_startup = 0x00;
+static const uint8_t bbc_startup = 0x07;
 
 /**
  * Check if currently-selected key is pressed

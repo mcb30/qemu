@@ -20,14 +20,14 @@
 #ifndef HW_BBC_CRT_H
 #define HW_BBC_CRT_H
 
-/** CRT pixel clock speed (in MHz)
+/** CRT pixel clock speed (in log2(MHz))
  *
  * CRTs don't actually have a defined horizontal resolution.  We use a
  * nominal CRT pixel clock of 16MHz (fairly close to PAL's 13.5MHz),
  * which gives us a width of 640 pixels in all standard BBC screen
  * modes.
  */
-#define BBC_CRT_PIXEL_CLOCK 16
+#define BBC_CRT_PIXEL_CLOCK_LOG2 4
 
 /** CRT character size (non-teletext)
  *
@@ -36,7 +36,15 @@
  * memory, even if the CRTC is configured for fewer than eight scan
  * lines.
  */
-#define BBC_CRT_CHAR_SIZE 8
+#define BBC_CRT_CHAR_SIZE_LOG2 3
+
+/** Maximum scan lines displayed for each character (non-teletext)
+ *
+ * Although the 6845 CRTC can generate scan line addresses (RA4..RA0)
+ * up to 31, only bits RA2..RA0 are connected through the address
+ * translation logic.  The display output is blanked when RA3=1.
+ */
+#define BBC_CRT_CHAR_MAX_SCAN_LINES 8
 
 /** Video RAM area alignment
  *
@@ -55,8 +63,8 @@
 /** CRTC address bit 13 selects teletext address translation */
 #define BBC_CRTC_ADDR_TELETEXT ( 1 << 13 )
 
-/** Indexed bitmap pixel format */
-#define BBC_CRT_PIXMAN_FORMAT PIXMAN_c8
+/** Displayed area image pixel format */
+#define BBC_CRT_IMAGE_FORMAT PIXMAN_c8
 
 /**
  * A BBC Micro display region
@@ -70,6 +78,8 @@ typedef struct {
 	hwaddr start;
 	/** Size (in bytes) */
 	unsigned int size;
+	/** Number of characters before this region */
+	unsigned int before_count;
 	/** Teletext address translation applies
 	 *
 	 * Note that teletext address translation (CRTC MA13 bit high)
@@ -107,9 +117,9 @@ typedef struct {
 	hwaddr start;
 	/** Size of video RAM */
 	unsigned int size;
-	/** Width of display (in pixels) */
+	/** Width of display (in host pixels) */
 	unsigned int width;
-	/** Height of display (in pixels) */
+	/** Height of display (in host pixels) */
 	unsigned int height;
 
 	/** Displayed area image */
