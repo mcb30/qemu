@@ -148,6 +148,8 @@ typedef struct {
 	const char *name;
 	/** 6522 VIA */
 	M6522VIA *via;
+	/** Stored keycode prefix */
+	int keycode_prefix;
 
 	/** Addressable latch */
 	uint8_t addressable_latch;

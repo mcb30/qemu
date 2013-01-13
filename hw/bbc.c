@@ -410,6 +410,165 @@ static void bbc_paged_rom_select_init ( MemoryRegion *parent, hwaddr offset,
 /** Startup DIP switches */
 static const uint8_t bbc_startup = 0x07;
 
+/** A BBC key */
+typedef struct {
+	/** Scancode (possibly extended) */
+	uint16_t scancode;
+	/** Column */
+	uint8_t column;
+	/** Row */
+	uint8_t row;
+	/** Name */
+	const char *name;
+} BBCKey;
+
+/** BBC keyboard map */
+static BBCKey bbc_keys[] = {
+
+	/* Basic keyboard grid (rows 1-7) */
+	{ 0x0001, 0, 7, "ESC" },		{ 0x003b, 1, 7, "F1" },
+	{ 0x003c, 2, 7, "F2" },			{ 0x003d, 3, 7, "F3" },
+	{ 0x003f, 4, 7, "F5" },			{ 0x0040, 5, 7, "F6" },
+	{ 0x0042, 6, 7, "F8" },			{ 0x0043, 7, 7, "F9" },
+	{ 0x002b, 8, 7, "\\|" },		{ 0xe04d, 9, 7, "Right" },
+	{ 0x0010, 0, 6, "Q" },			{ 0x0004, 1, 6, "3" },
+	{ 0x0005, 2, 6, "4" },			{ 0x0006, 3, 6, "5" },
+	{ 0x003e, 4, 6, "F4" },			{ 0x0009, 5, 6, "8" },
+	{ 0x0041, 6, 6, "F7" },			{ 0x000c, 7, 6, "-=" /* -_ */ },
+	{ 0x000d, 8, 6, "^~" /* =+ */ },	{ 0xe04b, 9, 6, "Left" },
+	{ 0x0044, 0, 5, "F0" /* F10 */ },	{ 0x0011, 1, 5, "W" },
+	{ 0x0012, 2, 5, "E" },			{ 0x0014, 3, 5, "T" },
+	{ 0x0008, 4, 5, "7" },			{ 0x000a, 5, 5, "9" },
+	{ 0x0017, 6, 5, "I" },			{ 0x000b, 7, 5, "0" },
+	{ 0x0029, 8, 5, "_£" /* `~ */ },	{ 0xe050, 9, 5, "Down" },
+	{ 0x0002, 0, 4, "1" },			{ 0x0003, 1, 4, "2" },
+	{ 0x0020, 2, 4, "D" },			{ 0x0013, 3, 4, "R" },
+	{ 0x0007, 4, 4, "6" },			{ 0x0016, 5, 4, "U" },
+	{ 0x0018, 6, 4, "O" },			{ 0x0019, 7, 4, "P" },
+	{ 0x001a, 8, 4, "[{" },			{ 0xe048, 9, 4, "Up" },
+	{ 0x003a, 0, 3, "CapsLock" },		{ 0x001e, 1, 3, "A" },
+	{ 0x002c, 2, 3, "Z" },			{ 0x0021, 3, 3, "F" },
+	{ 0x0015, 4, 3, "Y" },			{ 0x0024, 5, 3, "J" },
+	{ 0x002d, 6, 3, "X" },			{ 0x0058, 7, 3, "@" /* F12 */ },
+	{ 0x0028, 8, 3, ":*" /* '" */ },	{ 0x001c, 9, 3, "Return" },
+	{ 0x0045, 0, 2, "ShiftLock" /* NumLock */ }, { 0x001f, 1, 2, "S" },
+	{ 0x002e, 2, 2, "C" },			{ 0x0022, 3, 2, "G" },
+	{ 0x0023, 4, 2, "H" },			{ 0x0031, 5, 2, "N" },
+	{ 0x0026, 6, 2, "L" },			{ 0x0027, 7, 2, ";+" /* ;: */ },
+	{ 0x001b, 8, 2, "]}" },			{ 0xe053, 9, 2, "Delete" },
+	{ 0x000f, 0, 1, "Tab" },		{ 0x002c, 1, 1, "Z" },
+	{ 0x0039, 2, 1, "Space" },		{ 0x002f, 3, 1, "V" },
+	{ 0x0030, 4, 1, "B" },			{ 0x0032, 5, 1, "M" },
+	{ 0x0033, 6, 1, ",<" },			{ 0x0034, 7, 1, ".>" },
+	{ 0x0035, 8, 1, "/?" },		 { 0xe052, 9, 1, "Copy" /* Insert */ },
+
+	/* Modifier keys and DIP switches (row 0) */
+	{ 0x002a /* LShift */, 0, 0, "Shift" },
+	{ 0x001d /* LCtrl */, 1, 0, "Ctrl" },
+	{ 0, 2, 0, "SW1" },			{ 0, 3, 0, "SW2" },
+	{ 0, 4, 0, "SW3" },			{ 0, 5, 0, "SW4" },
+	{ 0, 6, 0, "SW5" },			{ 0, 7, 0, "SW6" },
+	{ 0, 8, 0, "SW7" },			{ 0, 9, 0, "SW8" },
+
+	/* Allow left/right modifier keys to function as equivalents */
+	{ 0x0036, 0, 0, "Shift (RShift)" },
+	{ 0xe01d, 1, 0, "Ctrl (RCtrl)" },
+
+	/* Allow Backspace to function as equivalent to Delete */
+	{ 0xe053, 9, 2, "Delete (Backspace)" },
+
+	/* Allow numeric keypad to function as nearest equivalent keys */
+	{ 0x0052, 7, 5, "0 (Keypad0)" },
+	{ 0x004f, 0, 4, "1 (Keypad1)" },
+	{ 0x0050, 1, 4, "2 (Keypad2)" },
+	{ 0x0051, 1, 6, "3 (Keypad3)" },
+	{ 0x004b, 2, 6, "4 (Keypad4)" },
+	{ 0x004c, 3, 6, "5 (Keypad5)" },
+	{ 0x004d, 4, 4, "6 (Keypad6)" },
+	{ 0x0047, 4, 5, "7 (Keypad7)" },
+	{ 0x0048, 5, 6, "8 (Keypad8)" },
+	{ 0x0049, 5, 5, "9 (Keypad9)" },
+	{ 0x0053, 7, 1, ".> (Keypad.)" },
+	{ 0x004e, 7, 2, ";+ (Keypad+)" },
+	{ 0x004a, 7, 6, "-= (Keypad-)" },
+	{ 0x0037, 8, 3, ":* (Keypad*)" },
+	{ 0xe035, 8, 1, "/? (Keypad/)" },
+	{ 0xe01c, 9, 3, "Return (KeypadEnter)" },
+
+	/* Allow "\|" key on UK keyboards ("<>" on many international
+	 * keyboards) to function as equivalent to US "\|".
+	 */
+	{ 0x0056, 8, 7, "\\| (UK)" },
+
+	/* Allow left Windows key to function as equivalent to
+	 * CapsLock, and right Windows key as equivalent to ShiftLock.
+	 */
+	{ 0xe05b, 0, 3, "CapsLock (LeftWindow)" },
+	{ 0xe05c, 0, 2, "ShiftLock (RightWindow)" },
+};
+
+/** Break key is a hardwired reset line on the BBC */
+#define BBC_KEY_BREAK 0xe11d
+
+/** Extended keypresses are prefixed by 0xeX */
+#define BBC_KEY_IS_PREFIX(keycode) ( ( (keycode) & 0xf0) == 0xe0 )
+
+/** Key releases are indicated by bit 7 */
+#define BBC_KEY_PRESSED(keycode) ( ! ( (keycode) & 0x80 ) )
+
+/** Scancode is constructed from prefix and keycode (ignoring bit 7) */
+#define BBC_KEY_SCANCODE( prefix, scancode ) \
+	( ( (prefix) << 8 ) | ( (scancode) & 0x7f ) )
+
+/**
+ * Handle keyboard event
+ *
+ * @v opaque		System VIA
+ * @v keycode		Keycode
+ */
+static void bbc_kbd_event ( void *opaque, int keycode ) {
+	BBCSystemVIA *via = opaque;
+	BBCKey *key = NULL;
+	int pressed;
+	uint16_t scancode;
+	unsigned int i;
+
+	printf ( "keycode %02x\n", keycode );
+
+	/* Handle extended keypresses */
+	if ( BBC_KEY_IS_PREFIX ( keycode ) ) {
+		via->keycode_prefix = keycode;
+		return;
+	}
+
+	/* Separate out key press/release indicator */
+	pressed = BBC_KEY_PRESSED ( keycode );
+
+	/* Construct extended scancode */
+	scancode = BBC_KEY_SCANCODE ( via->keycode_prefix, keycode );
+	via->keycode_prefix = 0;
+
+	/* Identify key */
+	for ( i = 0 ; i < ARRAY_SIZE ( bbc_keys ) ; i++ ) {
+		if ( bbc_keys[i].scancode == scancode ) {
+			key = &bbc_keys[i];
+			break;
+		}
+	}
+
+	/* Ignore unknown keys */
+	if ( ! key ) {
+		qemu_log_mask ( LOG_UNIMP, "%s: unknown scancode 0x%04x\n",
+				via->name, scancode );
+		return;
+	}
+
+	printf ( "key %s %s\n", key->name,
+		 ( pressed ? "pressed" : "released" ) );
+
+	// break key is a hardwired reset on BBC!
+}
+
 /**
  * Check if currently-selected key is pressed
  *
@@ -604,6 +763,9 @@ static BBCSystemVIA * bbc_system_via_init ( MemoryRegion *parent, hwaddr offset,
 	via->name = name;
 	via->via = m6522_init ( parent, offset, size, name, via,
 				&bbc_system_via_ops, irq );
+
+	/* Initialise keyboard */
+	qemu_add_kbd_event_handler ( bbc_kbd_event, via );
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, offset, &vmstate_bbc_system_via, via );
