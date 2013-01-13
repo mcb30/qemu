@@ -77,6 +77,8 @@
 #define BBC_LATCH_CAPS_LOCK 6
 #define BBC_LATCH_SHIFT_LOCK 7
 
+typedef struct BBCVideoULAUpdateEntry BBCVideoULAUpdateEntry;
+
 /**
  * Video ULA
  */
@@ -85,6 +87,8 @@ typedef struct {
 	const char *name;
 	/** Memory region */
 	MemoryRegion mr;
+	/** List of update notification functions */
+	QTAILQ_HEAD ( , BBCVideoULAUpdateEntry ) updates;
 
 	/** Cursor segment mask (4 bits) */
 	uint8_t cursor_mask;
@@ -99,6 +103,19 @@ typedef struct {
 	/** Palette */
 	uint8_t palette[16];
 } BBCVideoULA;
+
+/** A Video ULA update notification function */
+typedef void ( * BBCVideoULAUpdated ) ( void *opaque );
+
+/** A Video ULA update notification list entry */
+struct BBCVideoULAUpdateEntry {
+	/** Update notification function */
+	BBCVideoULAUpdated updated;
+	/** Opaque pointer */
+	void *opaque;
+	/** Next entry */
+	QTAILQ_ENTRY ( BBCVideoULAUpdateEntry ) next;
+};
 
 /**
  * Paged ROM
@@ -237,5 +254,12 @@ typedef struct {
 	/** Display */
 	BBCDisplay *crt;
 } BBCMicro;
+
+extern void bbc_video_ula_update_register ( BBCVideoULA *ula,
+					    BBCVideoULAUpdated updated,
+					    void *opaque );
+extern void bbc_video_ula_update_unregister ( BBCVideoULA *ula,
+					      BBCVideoULAUpdated updated,
+					      void *opaque );
 
 #endif

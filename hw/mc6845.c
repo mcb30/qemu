@@ -31,6 +31,57 @@
 	} while ( 0 )
 
 /**
+ * Register update notification function
+ *
+ * @v crtc		6845 CRTC
+ * @v updated		Update notification function
+ * @v opaque		Opaque pointer
+ */
+void mc6845_update_register ( MC6845CRTC *crtc, MC6845CRTCUpdated updated,
+			      void *opaque ) {
+	MC6845CRTCUpdateEntry *entry = g_new0 ( MC6845CRTCUpdateEntry, 1 );
+
+	entry->updated = updated;
+	entry->opaque = opaque;
+	QTAILQ_INSERT_TAIL ( &crtc->updates, entry, next );
+}
+
+/**
+ * Unregister update notification function
+ *
+ * @v crtc		6845 CRTC
+ * @v updated		Update notification function
+ * @v opaque		Opaque pointer
+ */
+void mc6845_update_unregister ( MC6845CRTC *crtc, MC6845CRTCUpdated updated,
+				void *opaque ) {
+	MC6845CRTCUpdateEntry *entry;
+
+	QTAILQ_FOREACH ( entry, &crtc->updates, next ) {
+		if ( ( entry->updated == updated ) &&
+		     ( entry->opaque == opaque ) ) {
+			QTAILQ_REMOVE ( &crtc->updates, entry, next );
+			g_free ( entry );
+			return;
+		}
+	}
+}
+
+/**
+ * Call update notification functions
+ *
+ * @v crtc		6845 CRTC
+ * @v addr		Updated register address
+ */
+static void mc6845_updated ( MC6845CRTC *crtc, hwaddr addr ) {
+	MC6845CRTCUpdateEntry *entry;
+
+	QTAILQ_FOREACH ( entry, &crtc->updates, next ) {
+		entry->updated ( entry->opaque, addr );
+	}
+}
+
+/**
  * Read from 6845 CRTC
  *
  * @v opaque		6845 CRTC
@@ -179,6 +230,8 @@ static void mc6845_write ( void *opaque, hwaddr addr, uint64_t data64,
 		     crtc->cursor_delay,
 		     ( crtc->cursor_disabled ? " disabled" : "" ) );
 
+	/* Call update notification functions */
+	mc6845_updated ( crtc, addr );
 }
 
 /** 6845 CRTC operations */
@@ -236,6 +289,7 @@ MC6845CRTC * mc6845_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
 
 	/* Initialise CRTC */
 	crtc->name = name;
+	QTAILQ_INIT ( &crtc->updates );
 
 	/* Register memory region */
 	memory_region_init_io ( &crtc->mr, &mc6845_ops, crtc, crtc->name,

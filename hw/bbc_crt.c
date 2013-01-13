@@ -105,8 +105,9 @@ static hwaddr bbc_crt_translate ( BBCDisplay *crt, unsigned int crtc_address,
  */
 static void bbc_crt_vram_update ( BBCDisplay *crt ) {
 	MC6845CRTC *crtc = crt->crtc;
+	unsigned int crtc_start;
+	unsigned int crtc_count;
 	unsigned int crtc_transition;
-	unsigned int screen_count;
 	unsigned int first_count;
 	unsigned int second_count;
 	hwaddr start;
@@ -114,43 +115,52 @@ static void bbc_crt_vram_update ( BBCDisplay *crt ) {
 	unsigned int size;
 	void *parent_ptr;
 
+	/* Calcuate screen start CRTC address and size (in characters) */
+	crtc_start = crtc->start;
+	crtc_count = ( crtc->horiz_displayed * crtc->vert_displayed );
+
+	/* Do nothing more unless CRTC address range has changed */
+	if ( ( crt->crtc_start == crtc_start ) &&
+	     ( crt->crtc_count == crtc_count ) ) {
+		return;
+	}
+
+	/* Record updated CRTC address range */
+	crt->crtc_start = crtc_start;
+	crt->crtc_count = crtc_count;
+
 	/* Calculate transition CRTC address, i.e. the first address
-	 * after crtc->start with a different value for MA12.  Note
+	 * after crtc_start with a different value for MA12.  Note
 	 * that (a) this address may exceed the 14-bit address range
 	 * of the CRTC, and (b) the CRTC may stop before reaching this
 	 * address.
 	 */
-	crtc_transition =
-		( ( crtc->start | ( BBC_CRTC_ADDR_ADJUST - 1 ) ) + 1 );
-
-	/* Calcuate screen size (in characters) */
-	screen_count = ( crtc->horiz_displayed * crtc->vert_displayed );
+	crtc_transition = ( ( crtc_start | ( BBC_CRTC_ADDR_ADJUST - 1 ) ) + 1 );
 
 	/* Calculate start address and translation for first display region */
-	crt->first.start = bbc_crt_translate ( crt, crtc->start,
+	crt->first.start = bbc_crt_translate ( crt, crtc_start,
 					       &crt->first.teletext );
-	first_count = ( crtc_transition - crtc->start );
-	if ( first_count > screen_count )
-		first_count = screen_count;
+	first_count = ( crtc_transition - crtc_start );
+	if ( first_count > crtc_count )
+		first_count = crtc_count;
 	crt->first.size = ( first_count << ( crt->first.teletext ? 0 :
 					     BBC_CRT_CHAR_SIZE_LOG2 ) );
 	crt->first.before_count = 0;
 
 	/* Calculate start address and translation for second display region */
-	if ( first_count < screen_count ) {
+	crt->second.before_count = first_count;
+	if ( first_count < crtc_count ) {
 		/* Second region starts at transition address */
 		crt->second.start = bbc_crt_translate ( crt, crtc_transition,
 							&crt->second.teletext );
-		second_count = ( screen_count - first_count );
+		second_count = ( crtc_count - first_count );
 		crt->second.size =
 			( second_count << ( crt->second.teletext ? 0 :
 					    BBC_CRT_CHAR_SIZE_LOG2 ) );
-		crt->second.before_count = first_count;
 	} else {
 		/* No second region */
 		crt->second.start = 0;
 		crt->second.size = 0;
-		crt->second.before_count = 0;
 		crt->second.teletext = false;
 	}
 
@@ -429,16 +439,9 @@ static void bbc_crt_update_region ( BBCDisplay *crt,
 static void bbc_crt_update ( void *opaque ) {
 	BBCDisplay *crt = opaque;
 
-	//
-	bbc_crt_vram_update ( crt );
-	bbc_crt_resize ( crt );
-
 	/* Do nothing unless we have an image */
 	if ( ! crt->image )
 		return;
-
-	//
-	crt->invalid = 1;
 
 	/* Update both regions */
 	bbc_crt_update_region ( crt, &crt->first );
@@ -497,6 +500,45 @@ static void bbc_crt_screen_dump ( void *opaque, const char *filename,
 }
 
 /**
+ * Handle update to CRTC register
+ *
+ * @v opaque		BBC display
+ * @v addr		CRTC register address
+ */
+static void bbc_crt_crtc_updated ( void *opaque, hwaddr addr ) {
+	BBCDisplay *crt = opaque;
+
+	/* Handle updated register */
+	switch ( addr ) {
+	case MC6845_HORIZ_DISPLAYED:
+	case MC6845_VERT_DISPLAYED:
+		bbc_crt_vram_update ( crt );
+		bbc_crt_resize ( crt );
+		break;
+	case MC6845_INTERLACE:
+	case MC6845_MAX_SCAN_LINE:
+		bbc_crt_resize ( crt );
+		break;
+	case MC6845_START_H:
+	case MC6845_START_L:
+		bbc_crt_vram_update ( crt );
+		break;
+	}
+}
+
+/**
+ * Handle update to Video ULA
+ *
+ * @v opaque		BBC display
+ */
+static void bbc_crt_ula_updated ( void *opaque ) {
+	BBCDisplay *crt = opaque;
+
+	/* Handle update */
+	bbc_crt_resize ( crt );
+}
+
+/**
  * Initialise CRT
  *
  * @v name		Name
@@ -527,6 +569,10 @@ BBCDisplay * bbc_crt_init ( const char *name, MemoryRegion *ram,
 	crt->ds = graphic_console_init ( bbc_crt_update,
 					 bbc_crt_invalidate,
 					 bbc_crt_screen_dump, NULL, crt );
+
+	/* Register for updates to CRTC and Video ULA registers */
+	mc6845_update_register ( crt->crtc, bbc_crt_crtc_updated, crt );
+	bbc_video_ula_update_register ( crt->ula, bbc_crt_ula_updated, crt );
 
 	return crt;
 }

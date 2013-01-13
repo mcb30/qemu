@@ -32,6 +32,58 @@
  */
 
 /**
+ * Register update notification function
+ *
+ * @v ula		Video ULA
+ * @v updated		Update notification function
+ * @v opaque		Opaque pointer
+ */
+void bbc_video_ula_update_register ( BBCVideoULA *ula,
+				     BBCVideoULAUpdated updated,
+				     void *opaque ) {
+	BBCVideoULAUpdateEntry *entry = g_new0 ( BBCVideoULAUpdateEntry, 1 );
+
+	entry->updated = updated;
+	entry->opaque = opaque;
+	QTAILQ_INSERT_TAIL ( &ula->updates, entry, next );
+}
+
+/**
+ * Unregister update notification function
+ *
+ * @v ula		Video ULA
+ * @v updated		Update notification function
+ * @v opaque		Opaque pointer
+ */
+void bbc_video_ula_update_unregister ( BBCVideoULA *ula,
+				       BBCVideoULAUpdated updated,
+				       void *opaque ) {
+	BBCVideoULAUpdateEntry *entry;
+
+	QTAILQ_FOREACH ( entry, &ula->updates, next ) {
+		if ( ( entry->updated == updated ) &&
+		     ( entry->opaque == opaque ) ) {
+			QTAILQ_REMOVE ( &ula->updates, entry, next );
+			g_free ( entry );
+			return;
+		}
+	}
+}
+
+/**
+ * Call update notification functions
+ *
+ * @v ula		Video ULA
+ */
+static void bbc_video_ula_updated ( BBCVideoULA *ula ) {
+	BBCVideoULAUpdateEntry *entry;
+
+	QTAILQ_FOREACH ( entry, &ula->updates, next ) {
+		entry->updated ( entry->opaque );
+	}
+}
+
+/**
  * Read from video ULA register
  *
  * @v opaque		Video ULA
@@ -73,6 +125,9 @@ static void bbc_video_ula_control_write ( BBCVideoULA *ula, uint8_t data ) {
 			( 1 << ula->pixel_clock_log2 ),
 			( ula->teletext ? " teletext" : "" ),
 			( ula->flash ? " flash" : "" ) );
+
+	/* Call update notification functions */
+	bbc_video_ula_updated ( ula );
 }
 
 /**
@@ -159,6 +214,7 @@ static BBCVideoULA * bbc_video_ula_init ( MemoryRegion *parent, hwaddr offset,
 
 	/* Initialise ULA */
 	ula->name = name;
+	QTAILQ_INIT ( &ula->updates );
 
 	/* Register memory region */
 	memory_region_init_io ( &ula->mr, &bbc_video_ula_ops, ula, name, size );

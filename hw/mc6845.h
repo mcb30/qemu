@@ -21,6 +21,7 @@
 #define HW_MC6845_H
 
 typedef struct MC6845CRTC MC6845CRTC;
+typedef struct MC6845CRTCUpdateEntry MC6845CRTCUpdateEntry;
 
 /** A 6845 CRTC */
 struct MC6845CRTC {
@@ -28,6 +29,8 @@ struct MC6845CRTC {
 	const char *name;
 	/** Memory region */
 	MemoryRegion mr;
+	/** List of update notification functions */
+	QTAILQ_HEAD ( , MC6845CRTCUpdateEntry ) updates;
 
 	/** Address register */
 	uint8_t address;
@@ -77,6 +80,19 @@ struct MC6845CRTC {
 	uint16_t cursor;
 	/** Light pen */
 	uint16_t pen;
+};
+
+/** A 6845 CRTC update notification function */
+typedef void ( * MC6845CRTCUpdated ) ( void *opaque, hwaddr addr );
+
+/** A 6845 CRTC update notification list entry */
+struct MC6845CRTCUpdateEntry {
+	/** Update notification function */
+	MC6845CRTCUpdated updated;
+	/** Opaque pointer */
+	void *opaque;
+	/** Next entry */
+	QTAILQ_ENTRY ( MC6845CRTCUpdateEntry ) next;
 };
 
 /**
@@ -133,6 +149,12 @@ static inline int mc6845_cursor_vert ( MC6845CRTC *crtc ) {
 #define MC6845_PEN_H 0x10
 #define MC6845_PEN_L 0x11
 
+extern void mc6845_update_register ( MC6845CRTC *crtc,
+				     MC6845CRTCUpdated updated,
+				     void *opaque );
+extern void mc6845_update_unregister ( MC6845CRTC *crtc,
+				       MC6845CRTCUpdated updated,
+				       void *opaque );
 extern MC6845CRTC * mc6845_init ( MemoryRegion *parent, hwaddr offset,
 				  uint64_t size, const char *name );
 

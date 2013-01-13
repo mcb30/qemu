@@ -109,6 +109,10 @@ typedef struct {
 	/** System VIA */
 	BBCSystemVIA *via;
 
+	/** CRTC start address */
+	unsigned int crtc_start;
+	/** Size of screen (in CRTC characters) */
+	unsigned int crtc_count;
 	/** Display region prior to wrap-around */
 	BBCDisplayRegion first;
 	/** Display region after wrap-around */
