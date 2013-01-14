@@ -50,10 +50,15 @@ static void mc6850_control_write ( MC6850ACIA *acia, uint8_t data ) {
  * @ret data		Data
  */
 static uint8_t mc6850_status_read ( MC6850ACIA *acia ) {
+	uint8_t data;
+	
+	// Do not log; this register gets polled by IRQ handlers.
+	//
+	//	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented status read\n",
+	//			acia->name );
+	data = 0;
 
-	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented status read\n",
-			acia->name );
-	return 0;
+	return data;
 }
 
 /**
@@ -75,10 +80,13 @@ static void mc6850_data_write ( MC6850ACIA *acia, uint8_t data ) {
  * @ret data		Data
  */
 static uint8_t mc6850_data_read ( MC6850ACIA *acia ) {
+	uint8_t data;
 
 	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented data read\n",
 			acia->name );
-	return 0;
+	data = 0;
+
+	return data;
 }
 
 /**

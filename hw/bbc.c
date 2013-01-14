@@ -979,6 +979,122 @@ static BBCUserVIA * bbc_user_via_init ( MemoryRegion *parent, hwaddr offset,
 
 /******************************************************************************
  *
+ * Analogue to digital converter (UPD7002)
+ *
+ */
+
+/**
+ * Read from analogue to digital converter status register
+ *
+ * @v adc		ADC
+ * @ret data		Data
+ */
+static uint8_t bbc_adc_status_read ( BBCADC *adc ) {
+	uint8_t data;
+
+	/* While we don't implement the ADC, we must implement the
+	 * status register since the MOS's interrupt service routine
+	 * will check to see if the ADC was the source of an
+	 * interrupt.
+	 */
+	data = BBC_ADC_NOT_COMPLETE;
+
+	return data;
+}
+
+/**
+ * Read from analogue to digital converter
+ *
+ * @v opaque		ADC
+ * @v addr		Register address
+ * @v size		Size of read
+ * @ret data		Read data
+ */
+static uint64_t bbc_adc_read ( void *opaque, hwaddr addr, unsigned int size ) {
+	BBCADC *adc = opaque;
+	uint8_t data;
+
+	/* Read from specified register */
+	switch ( addr & ( BBC_ADC_SIZE - 1 ) ) {
+	case BBC_ADC_STATUS:
+		data = bbc_adc_status_read ( adc );
+		break;
+	default:
+		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from "
+				"0x%02lx\n", adc->name, addr );
+		data = 0;
+		break;
+	}
+
+	return data;
+}
+
+/**
+ * Write to analogue to digital converter
+ *
+ * @v opaque		ADC
+ * @v addr		Register address
+ * @v data64		Data to write
+ * @v size		Size of write
+ */
+static void bbc_adc_write ( void *opaque, hwaddr addr,
+			    uint64_t data64, unsigned int size ) {
+	BBCADC *adc = opaque;
+	uint8_t data = data64;
+
+	/* Write to specified register */
+	switch ( addr & ( BBC_ADC_SIZE - 1 ) ) {
+	default:
+		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write &%02x to "
+				"&%02lx\n", adc->name, data, addr );
+		break;
+	}
+}
+
+/** ADC operations */
+static const MemoryRegionOps bbc_adc_ops = {
+	.read = bbc_adc_read,
+	.write = bbc_adc_write,
+};
+
+/** ADC state description */
+static const VMStateDescription vmstate_bbc_adc = {
+	.name = "bbc_adc",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_END_OF_LIST()
+	},
+};
+
+/**
+ * Initialise analogue to digital converter
+ *
+ * @v parent		Parent memory region
+ * @v offset		Offset within parent memory region
+ * @v size		Size of memory region
+ * @v name		Device name
+ * @ret adc		ADC
+ */
+static BBCADC * bbc_adc_init ( MemoryRegion *parent, hwaddr offset,
+			       uint64_t size, const char *name ) {
+	BBCADC *adc = g_new0 ( BBCADC, 1 );
+
+	/* Initialise ADC */
+	adc->name = name;
+
+	/* Register memory region */
+	memory_region_init_io ( &adc->mr, &bbc_adc_ops, adc, name, size );
+	memory_region_add_subregion ( parent, offset, &adc->mr );
+
+	/* Register virtual machine state */
+	vmstate_register ( NULL, offset, &vmstate_bbc_adc, adc );
+
+	return adc;
+}
+
+/******************************************************************************
+ *
  * FRED, JIM and SHEILA
  *
  */
@@ -1128,6 +1244,10 @@ static BBCSHEILA * bbc_sheila_init ( MemoryRegion *parent, hwaddr offset,
 		bbc_user_via_init ( &sheila->mr, BBC_SHEILA_USER_VIA_BASE,
 				    BBC_SHEILA_USER_VIA_SIZE,
 				    "user_via", user_via_irq );
+
+	/* Initialise analogue to digital converter */
+	sheila->adc = bbc_adc_init ( &sheila->mr, BBC_SHEILA_ADC_BASE,
+				     BBC_SHEILA_ADC_SIZE, "adc" );
 
 	return sheila;
 }

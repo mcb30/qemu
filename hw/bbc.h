@@ -61,6 +61,8 @@
 #define BBC_SHEILA_SYSTEM_VIA_SIZE 0x10
 #define BBC_SHEILA_USER_VIA_BASE 0x60
 #define BBC_SHEILA_USER_VIA_SIZE 0x10
+#define BBC_SHEILA_ADC_BASE 0xc0
+#define BBC_SHEILA_ADC_SIZE 0x20
 
 /* Video ULA */
 #define BBC_VIDEO_ULA_SIZE 0x02
@@ -76,6 +78,16 @@
 #define BBC_LATCH_C1 5
 #define BBC_LATCH_CAPS_LOCK 6
 #define BBC_LATCH_SHIFT_LOCK 7
+
+/* Analogue to digital converter */
+#define BBC_ADC_SIZE 0x04
+#define BBC_ADC_START 0x00
+#define BBC_ADC_STATUS 0x00
+#define BBC_ADC_DATA_HIGH 0x01
+#define BBC_ADC_DATA_LOW 0x02
+
+/* Analogue to digital converter status register */
+#define BBC_ADC_NOT_COMPLETE 0x80
 
 /** System clock runs at 1MHz */
 #define BBC_1MHZ_TICK_NS 1000
@@ -184,6 +196,16 @@ typedef struct {
 } BBCUserVIA;
 
 /**
+ * Analogue to digital converter
+ */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Memory region */
+	MemoryRegion mr;
+} BBCADC;
+
+/**
  * Unimplemented memory region
  */
 typedef struct {
@@ -233,6 +255,8 @@ typedef struct {
 	BBCSystemVIA *system_via;
 	/** User VIA */
 	BBCUserVIA *user_via;
+	/** Analogue to digital converter */
+	BBCADC *adc;
 } BBCSHEILA;
 
 /**
