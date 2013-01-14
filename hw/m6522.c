@@ -334,6 +334,50 @@ static void m6522_ddr_write ( M6522VIA *via, M6522VIAPort *port,
  */
 
 /**
+ * Start timer
+ *
+ * @v via		6522 VIA
+ * @v timer		Timer
+ */
+static void m6522_timer_start ( M6522VIA *via, M6522VIATimer *timer ) {
+	int64_t expire_time;
+
+	/* Do nothing if no timeout is set */
+	if ( ! timer->counter )
+		return;
+
+	/* For timer 2, do nothing if configured to count pulses */
+	if ( ( timer == &via->t2 ) && ( via->acr & M6522_ACR_T2_COUNT ) )
+		return;
+
+	/* Calculate expiry time */
+	expire_time = ( qemu_get_clock_ns ( vm_clock ) +
+			( timer->counter * via->tick_ns ) );
+
+	/* Modify timer */
+	qemu_mod_timer ( timer->timer, expire_time );
+}
+
+/**
+ * Handle timer expiry
+ *
+ * @v opaque		Timer
+ */
+static void m6522_timer_expired ( void *opaque ) {
+	M6522VIATimer *timer = opaque;
+	M6522VIA *via = timer->via;
+
+	/* Set interrupt */
+	m6522_set_interrupts ( via, timer->ifr );
+
+	/* Automatically restart timer 1 if configured to do so */
+	if ( ( timer == &via->t1 ) && ( via->acr & M6522_ACR_T1_CONTINUOUS ) ) {
+		timer->counter = timer->latch;
+		m6522_timer_start ( via, timer );
+	}
+}
+
+/**
  * Read from 6522 VIA timer latch low byte
  *
  * @v via		6522 VIA
@@ -344,7 +388,7 @@ static uint8_t m6522_latch_read_low ( M6522VIA *via, M6522VIATimer *timer ) {
 	uint8_t data;
 
 	/* Read latch low byte */
-	data = ( ( timer->l >> 0 ) & 0xff );
+	data = ( ( timer->latch >> 0 ) & 0xff );
 
 	return data;
 }
@@ -360,7 +404,7 @@ static uint8_t m6522_latch_read_high ( M6522VIA *via, M6522VIATimer *timer ) {
 	uint8_t data;
 
 	/* Read latch high byte */
-	data = ( ( timer->l >> 8 ) & 0xff );
+	data = ( ( timer->latch >> 8 ) & 0xff );
 
 	return data;
 }
@@ -376,7 +420,7 @@ static uint8_t m6522_counter_read_low ( M6522VIA *via, M6522VIATimer *timer ) {
 	uint8_t data;
 
 	/* Read counter low byte */
-	data = ( ( timer->c >> 0 ) & 0xff );
+	data = ( ( timer->counter >> 0 ) & 0xff );
 
 	/* Clear interrupt */
 	m6522_clear_interrupts ( via, timer->ifr );
@@ -395,7 +439,7 @@ static uint8_t m6522_counter_read_high ( M6522VIA *via, M6522VIATimer *timer ) {
 	uint8_t data;
 
 	/* Read counter high byte */
-	data = ( ( timer->c >> 8 ) & 0xff );
+	data = ( ( timer->counter >> 8 ) & 0xff );
 
 	return data;
 }
@@ -413,8 +457,8 @@ static void m6522_latch_write_low ( M6522VIA *via, M6522VIATimer *timer,
 	LOG_M6522 ( "%s: T%sL_L=0x%02x\n", via->name, timer->name, data );
 
 	/* Update latch low byte */
-	timer->l &= ~0xff;
-	timer->l |= data;
+	timer->latch &= ~0xff;
+	timer->latch |= data;
 }
 
 /**
@@ -430,8 +474,8 @@ static void m6522_latch_write_high ( M6522VIA *via, M6522VIATimer *timer,
 	LOG_M6522 ( "%s: T%sL_H=0x%02x\n", via->name, timer->name, data );
 
 	/* Update latch high byte */
-	timer->l &= ~0xff00;
-	timer->l |= ( data << 8 );
+	timer->latch &= ~0xff00;
+	timer->latch |= ( data << 8 );
 
 	/* Clear interrupt */
 	m6522_clear_interrupts ( via, timer->ifr );
@@ -450,24 +494,23 @@ static void m6522_counter_write_high ( M6522VIA *via, M6522VIATimer *timer,
 	LOG_M6522 ( "%s: T%sC_H=0x%02x\n", via->name, timer->name, data );
 
 	/* Update counter high byte */
-	timer->c &= ~0xff00;
-	timer->c |= ( data << 8 );
+	timer->counter &= ~0xff00;
+	timer->counter |= ( data << 8 );
 
 	/* Update latch high byte (T1 only) */
 	if ( timer == &via->t1 ) {
-		timer->l &= ~0xff00;
-		timer->l |= ( data << 8 );
+		timer->latch &= ~0xff00;
+		timer->latch |= ( data << 8 );
 	}
 
 	/* Load counter from latch */
-	timer->c = timer->l;
+	timer->counter = timer->latch;
 
 	/* Clear interrupts */
 	m6522_clear_interrupts ( via, timer->ifr );
 
 	/* Start timer */
-	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented timer start 0x%04x\n",
-			via->name, timer->c );
+	m6522_timer_start ( via, timer );
 }
 
 /******************************************************************************
@@ -505,6 +548,41 @@ static void m6522_sr_write ( M6522VIA *via, uint8_t data ) {
 
 	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to shift "
 			"register\n", via->name, data );
+}
+
+/******************************************************************************
+ *
+ * Auxiliary control register
+ *
+ */
+
+/**
+ * Read from 6522 VIA ACR
+ *
+ * @v via		6522 VIA
+ * @ret data		Data
+ */
+static uint8_t m6522_acr_read ( M6522VIA *via ) {
+	uint8_t data;
+
+	/* Read auxiliary control register */
+	data = via->acr;
+
+	return data;
+}
+
+/**
+ * Write to 6522 VIA ACR
+ *
+ * @v via		6522 VIA
+ * @v data		Data
+ */
+static void m6522_acr_write ( M6522VIA *via, uint8_t data ) {
+
+	LOG_M6522 ( "%s: ACR=0x%02x\n", via->name, data );
+
+	/* Write auxiliary control register */
+	via->acr = data;
 }
 
 /******************************************************************************
@@ -595,6 +673,9 @@ static uint64_t m6522_read ( void *opaque, hwaddr addr, unsigned int size ) {
 	case M6522_SR:
 		data = m6522_sr_read ( via );
 		break;
+	case M6522_ACR:
+		data = m6522_acr_read ( via );
+		break;
 	case M6522_PCR:
 		data = m6522_pcr_read ( via );
 		break;
@@ -668,6 +749,9 @@ static void m6522_write ( void *opaque, hwaddr addr, uint64_t data64,
 	case M6522_PCR:
 		m6522_pcr_write ( via, data );
 		break;
+	case M6522_ACR:
+		m6522_acr_write ( via, data );
+		break;
 	case M6522_IFR:
 		m6522_ifr_write ( via, data );
 		break;
@@ -700,10 +784,10 @@ static const VMStateDescription vmstate_m6522 = {
 		VMSTATE_UINT8 ( b.ddr, M6522VIA ),
 		VMSTATE_UINT8 ( a.or, M6522VIA ),
 		VMSTATE_UINT8 ( a.ddr, M6522VIA ),
-		VMSTATE_UINT16 ( t1.l, M6522VIA ),
-		VMSTATE_UINT16 ( t1.c, M6522VIA ),
-		VMSTATE_UINT16 ( t2.l, M6522VIA ),
-		VMSTATE_UINT16 ( t2.c, M6522VIA ),
+		VMSTATE_UINT16 ( t1.latch, M6522VIA ),
+		VMSTATE_UINT16 ( t1.counter, M6522VIA ),
+		VMSTATE_UINT16 ( t2.latch, M6522VIA ),
+		VMSTATE_UINT16 ( t2.counter, M6522VIA ),
 		VMSTATE_UINT8 ( sr, M6522VIA ),
 		VMSTATE_UINT8 ( acr, M6522VIA ),
 		VMSTATE_UINT8 ( pcr, M6522VIA ),
@@ -723,17 +807,19 @@ static const VMStateDescription vmstate_m6522 = {
  * @v opaque		Opaque pointer
  * @v ops		VIA operations
  * @v irq		Interrupt request line
+ * @v tick_ns		Clock tick duration (in nanoseconds)
  * @ret via		6522 VIA
  */
 M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
 			const char *name, void *opaque, const M6522VIAOps *ops,
-			qemu_irq irq ) {
+			qemu_irq irq, unsigned long tick_ns ) {
 	M6522VIA *via = g_new0 ( M6522VIA, 1 );
 
 	/* Initialise VIA */
 	via->name = name;
 	via->opaque = opaque;
 	via->irq = irq;
+	via->tick_ns = tick_ns;
 
 	/* Initialise ports */
 	via->a.via = via;
@@ -760,6 +846,10 @@ M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
 	via->t2.name = "2";
 	via->t1.ifr = M6522_INT_T1;
 	via->t2.ifr = M6522_INT_T2;
+	via->t1.timer = qemu_new_timer_ns ( vm_clock, m6522_timer_expired,
+					    &via->t1 );
+	via->t2.timer = qemu_new_timer_ns ( vm_clock, m6522_timer_expired,
+					    &via->t2 );
 
 	/* Register memory region */
 	memory_region_init_io ( &via->mr, &m6522_ops, via, via->name, size );

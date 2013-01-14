@@ -77,6 +77,9 @@
 #define BBC_LATCH_CAPS_LOCK 6
 #define BBC_LATCH_SHIFT_LOCK 7
 
+/** System clock runs at 1MHz */
+#define BBC_1MHZ_TICK_NS 1000
+
 typedef struct BBCVideoULAUpdateEntry BBCVideoULAUpdateEntry;
 
 /**

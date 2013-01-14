@@ -94,11 +94,13 @@ typedef struct {
 	const char *name;
 	/** Interrupt flag bit */
 	uint8_t ifr;
+	/** Timer */
+	QEMUTimer *timer;
 
 	/** Latches */
-	uint16_t l;
+	uint16_t latch;
 	/** Counter */
-	uint16_t c;
+	uint16_t counter;
 } M6522VIATimer;
 
 /** A 6522 VIA */
@@ -112,6 +114,8 @@ struct M6522VIA {
 	/** Opaque pointer */
 	void *opaque;
 
+	/** Clock tick duration (in nanoseconds) */
+	unsigned long tick_ns;
 	/** Port A */
 	M6522VIAPort a;
 	/** Port B */
@@ -177,8 +181,13 @@ struct M6522VIA {
 #define M6522_PCR_C2_OUTPUT_FIXED 0x04
 #define M6522_PCR_C2_OUTPUT 0x08
 
+/* Auxiliary control register */
+#define M6522_ACR_T2_COUNT 0x20
+#define M6522_ACR_T1_CONTINUOUS 0x40
+
 extern M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset,
 			       uint64_t size, const char *name, void *opaque,
-			       const M6522VIAOps *ops, qemu_irq irq );
+			       const M6522VIAOps *ops, qemu_irq irq,
+			       unsigned long tick_ns );
 
 #endif

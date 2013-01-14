@@ -858,7 +858,7 @@ static BBCSystemVIA * bbc_system_via_init ( MemoryRegion *parent, hwaddr offset,
 	/* Initialise system VIA */
 	via->name = name;
 	via->via = m6522_init ( parent, offset, size, name, via,
-				&bbc_system_via_ops, irq );
+				&bbc_system_via_ops, irq, BBC_1MHZ_TICK_NS );
 
 	/* Initialise keyboard */
 	qemu_add_kbd_event_handler ( bbc_keyboard_event, via );
@@ -923,7 +923,7 @@ static BBCUserVIA * bbc_user_via_init ( MemoryRegion *parent, hwaddr offset,
 	/* Initialise user VIA */
 	via->name = name;
 	via->via = m6522_init ( parent, offset, size, name, via,
-				&bbc_user_via_ops, irq );
+				&bbc_user_via_ops, irq, BBC_1MHZ_TICK_NS );
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, offset, &vmstate_bbc_user_via, via );
