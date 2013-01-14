@@ -269,6 +269,8 @@ static void bbc_paged_rom_update_alias ( BBCPagedROM *paged ) {
 	/* Change offset address into paged ROM virtual memory region */
 	offset = bbc_paged_rom_offset ( paged, paged->page );
 	memory_region_set_alias_offset ( &paged->rom, offset );
+	qemu_log_mask ( CPU_LOG_IOPORT, "%s: ROM %d activated\n",
+			paged->name, paged->page );
 }
 
 /**
@@ -1308,7 +1310,7 @@ static void bbc_load_paged_roms ( BBCPagedROM *paged,
 			( i < ( nb_option_roms + 1 ) ) ) ; i++ ) {
 		page = ( paged->count - i - 1 );
 		filename = ( ( i == nb_option_roms ) ? basic_filename :
-			     option_rom[0].name );
+			     option_rom[i].name );
 		name = g_strdup_printf ( "rom%d %s", page, filename );
 		bbc_load_rom ( &paged->roms,
 			       bbc_paged_rom_offset ( paged, page ),
