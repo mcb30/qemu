@@ -140,6 +140,12 @@ typedef struct {
 	uint8_t page;
 } BBCPagedROM;
 
+/** Number of columns in keyboard grid */
+#define BBC_KEYBOARD_COLUMNS 16
+
+/** Rows capable of generating a keyboard interrupt */
+#define BBC_KEYBOARD_IRQ_ROW_MASK 0xfe
+
 /**
  * System VIA
  */
@@ -150,11 +156,16 @@ typedef struct {
 	M6522VIA *via;
 	/** Stored keycode prefix */
 	int keycode_prefix;
-	/** Keys currently pressed */
-	bool key_pressed[10][8];
-	/** Number of interrupting keys currently pressed */
-	unsigned int interrupting_keys;
+	/** Keys currently pressed
+	 *
+	 * Each byte represents one column of the keyboard grid.  We
+	 * include columns 10-15 (which don't physically exist) since
+	 * the MOS does attempt to read from these columns.
+	 */
+	uint8_t keys_pressed[BBC_KEYBOARD_COLUMNS];
 
+	/** Slow data bus content */
+	uint8_t slow_data;
 	/** Addressable latch */
 	uint8_t addressable_latch;
 } BBCSystemVIA;

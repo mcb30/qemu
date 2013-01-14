@@ -410,6 +410,66 @@ static void bbc_paged_rom_select_init ( MemoryRegion *parent, hwaddr offset,
 /** Startup DIP switches */
 static const uint8_t bbc_startup = 0x07;
 
+/**
+ * Check if CAPS LOCK is enabled
+ *
+ * @v via		System VIA
+ * @ret caps_lock	CAPS LOCK is enabled
+ */
+static inline int bbc_caps_lock ( BBCSystemVIA *via ) {
+
+	/* CAPS LOCK is controlled via the addressable latch */
+	return ( via->addressable_latch & ( 1 << BBC_LATCH_CAPS_LOCK ) );
+}
+
+/**
+ * Check if SHIFT LOCK is enabled
+ *
+ * @v via		System VIA
+ * @ret shift_lock	SHIFT LOCK is enabled
+ */
+static inline int bbc_shift_lock ( BBCSystemVIA *via ) {
+
+	/* SHIFT LOCK is controlled via the addressable latch */
+	return ( via->addressable_latch & ( 1 << BBC_LATCH_SHIFT_LOCK ) );
+}
+
+/**
+ * Check if keyboard autoscan is enabled
+ *
+ * @v via		System VIA
+ * @ret autoscan	Autoscan is enabled
+ */
+static inline int bbc_keyboard_autoscan ( BBCSystemVIA *via ) {
+
+	/* Autoscan is controlled via the addressable latch */
+	return ( via->addressable_latch & ( 1 << BBC_LATCH_KB_WE ) );
+}
+
+/**
+ * Get keyboard row address (valid only if autoscan is disabled)
+ *
+ * @v via		System VIA
+ * @ret row		Row address
+ */
+static inline unsigned int bbc_keyboard_row ( BBCSystemVIA *via ) {
+
+	/* Row address is in PA6:4 */
+	return ( ( via->slow_data >> 4 ) & 0x07 );
+}
+
+/**
+ * Get keyboard column address (valid only if autoscan is disabled)
+ *
+ * @v via		System VIA
+ * @ret column		Column address
+ */
+static inline unsigned int bbc_keyboard_column ( BBCSystemVIA *via ) {
+
+	/* Column address is in PA3:0 */
+	return ( ( via->slow_data >> 0 ) & 0x0f );
+}
+
 /** A BBC key */
 typedef struct {
 	/** Scancode (possibly extended) */
@@ -520,8 +580,31 @@ static BBCKey bbc_keys[] = {
 #define BBC_KEY_SCANCODE( prefix, scancode ) \
 	( ( (prefix) << 8 ) | ( (scancode) & 0x7f ) )
 
-/** Keys in rows 1-7 can interrupt */
-#define BBC_KEY_CAN_INTERRUPT( row ) ( (row) != 0 )
+/**
+ * Update keyboard interrupt line
+ *
+ * @v via		System VIA
+ */
+static void bbc_keyboard_update_irq ( BBCSystemVIA *via ) {
+	uint8_t keys_pressed;
+	unsigned int column;
+
+	/* Get bitmask of contributing keypresses */
+	if ( bbc_keyboard_autoscan ( via ) ) {
+		keys_pressed = 0;
+		for ( column = 0 ; column < BBC_KEYBOARD_COLUMNS ; column++ )
+			keys_pressed |= via->keys_pressed[column];
+	} else {
+		column = bbc_keyboard_column ( via );
+		keys_pressed = via->keys_pressed[column];
+	}
+
+	/* Only rows 1-7 contribute towards the interrupt */
+	keys_pressed &= BBC_KEYBOARD_IRQ_ROW_MASK;
+
+	/* Update VIA's CA2 interrupt line */
+	qemu_set_irq ( via->via->a.c2.irq, keys_pressed );
+}
 
 /**
  * Handle keyboard event
@@ -529,7 +612,7 @@ static BBCKey bbc_keys[] = {
  * @v opaque		System VIA
  * @v keycode		Keycode
  */
-static void bbc_kbd_event ( void *opaque, int keycode ) {
+static void bbc_keyboard_event ( void *opaque, int keycode ) {
 	BBCSystemVIA *via = opaque;
 	BBCKey *key = NULL;
 	bool pressed;
@@ -549,6 +632,12 @@ static void bbc_kbd_event ( void *opaque, int keycode ) {
 	scancode = BBC_KEY_SCANCODE ( via->keycode_prefix, keycode );
 	via->keycode_prefix = 0;
 
+	/* BREAK isn't part of the keyboard; it's a hardware reset switch */
+	if ( scancode == BBC_KEY_BREAK ) {
+		qemu_system_reset_request();
+		return;
+	}
+
 	/* Identify key */
 	for ( i = 0 ; i < ARRAY_SIZE ( bbc_keys ) ; i++ ) {
 		if ( bbc_keys[i].scancode == scancode ) {
@@ -565,71 +654,43 @@ static void bbc_kbd_event ( void *opaque, int keycode ) {
 	}
 
 	/* Ignore duplicate press/release events */
-	if ( pressed == via->key_pressed[key->column][key->row] )
+	if ( pressed == ( !! ( via->keys_pressed[key->column] &
+			       ( 1 << key->row ) ) ) ) {
 		return;
+	}
 
 	/* Record key as pressed/released */
-	via->key_pressed[key->column][key->row] = pressed;
+	via->keys_pressed[key->column] &= ~( 1 << key->row );
+	if ( pressed )
+		via->keys_pressed[key->column] |= ( 1 << key->row );
 	qemu_log_mask ( CPU_LOG_IOPORT, "%s: key %s %s\n", via->name,
 			key->name, ( pressed ? "pressed" : "released" ) );
 
-	/* Update number of interrupting keys and update interrupt request */
-	if ( BBC_KEY_CAN_INTERRUPT ( key->row ) ) {
-		via->interrupting_keys += ( pressed ? 1 : -1 );
-		qemu_set_irq ( via->via->a.c2.irq,
-			       ( via->interrupting_keys > 0 ) );
-	}
-
-	// break key is a hardwired reset on BBC!
+	/* Update keyboard interrupt line */
+	bbc_keyboard_update_irq ( via );
 }
 
 /**
  * Check if currently-selected key is pressed
  *
- * @v data		Slow data bus contents (excluding PA7)
+ * @v via		System VIA
  * @ret pressed		Key is pressed
  */
-static int bbc_keyboard_pressed ( uint8_t data ) {
-	unsigned int row;
-	unsigned int column;
+static int bbc_keyboard_pressed ( BBCSystemVIA *via ) {
+	unsigned int row = bbc_keyboard_row ( via );
+	unsigned int column = bbc_keyboard_column ( via );
 	int pressed;
-
-	/* Calculate row (PA6:4) and column (PA3:0) addresses */
-	row = ( ( data >> 4 ) & 0x07 );
-	column = ( ( data >> 0 ) & 0x0f );
 
 	/* Startup DIP switches are mapped to row 0 columns 2-9 */
 	if ( ( row == 0 ) && ( column >= 2 ) ) {
 		pressed = ( ( bbc_startup >> ( 9 - column ) ) & 0x01 );
 	} else {
-		pressed = 0;
+		pressed = ( via->keys_pressed[column] & ( 1 << row ) );
 	}
 
 	qemu_log_mask ( CPU_LOG_IOPORT, "BBC: keyboard column %d row %d %s\n",
 			column, row, ( pressed ? "pressed" : "not pressed" ) );
 	return pressed;
-}
-
-/**
- * Check if CAPS LOCK is enabled
- *
- * @v via		System VIA
- * @ret caps_lock	CAPS LOCK is enabled
- */
-static inline int bbc_caps_lock ( BBCSystemVIA *via ) {
-
-	return ( via->addressable_latch & ( 1 << BBC_LATCH_CAPS_LOCK ) );
-}
-
-/**
- * Check if SHIFT LOCK is enabled
- *
- * @v via		System VIA
- * @ret shift_lock	SHIFT LOCK is enabled
- */
-static inline int bbc_shift_lock ( BBCSystemVIA *via ) {
-
-	return ( via->addressable_latch & ( 1 << BBC_LATCH_SHIFT_LOCK ) );
 }
 
 /**
@@ -663,22 +724,38 @@ static void bbc_keyboard_leds ( BBCSystemVIA *via ) {
  * @v opaque		System VIA
  * @ret data		Slow data bus contents
  */
-static uint8_t bbc_slow_data ( void *opaque ) {
+static uint8_t bbc_slow_data_read ( void *opaque ) {
 	BBCSystemVIA *via = opaque;
 	M6522VIAPort *port = &via->via->a;
 	uint8_t data;
 
 	/* Set data equal to outputs for all pins configured as outputs */
-	data = ( port->or & port->ddr );
+	data = ( via->slow_data & port->ddr );
 
 	/* Read from keyboard into PA7 if keyboard is enabled */
-	if ( ! ( via->addressable_latch & ( 1 << BBC_LATCH_KB_WE ) ) ) {
+	if ( ! bbc_keyboard_autoscan ( via ) ) {
 		data &= ~( 1 << 7 );
-		if ( bbc_keyboard_pressed ( data ) )
+		if ( bbc_keyboard_pressed ( via ) )
 			data |= ( 1 << 7 );
 	}
 
 	return data;
+}
+
+/**
+ * Write to slow data bus (system VIA port A)
+ *
+ * @v opaque		System VIA
+ * @v data		Data
+ */
+static void bbc_slow_data_write ( void *opaque, uint8_t data ) {
+	BBCSystemVIA *via = opaque;
+
+	/* Record slow data bus contents */
+	via->slow_data = data;
+
+	/* Update keyboard interrupt line */
+	bbc_keyboard_update_irq ( via );
 }
 
 /**
@@ -690,7 +767,7 @@ static uint8_t bbc_slow_data ( void *opaque ) {
 static void bbc_sound_write ( BBCSystemVIA *via ) {
 
 	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented sound write &%02x\n",
-			via->name, bbc_slow_data ( via ) );
+			via->name, via->slow_data );
 }
 
 /**
@@ -730,6 +807,9 @@ static void bbc_addressable_latch_write ( void *opaque, uint8_t data ) {
 		if ( ! latch_data )
 			bbc_sound_write ( via );
 		break;
+	case BBC_LATCH_KB_WE:
+		bbc_keyboard_update_irq ( via );
+		break;
 	case BBC_LATCH_CAPS_LOCK:
 	case BBC_LATCH_SHIFT_LOCK:
 		bbc_keyboard_leds ( via );
@@ -743,7 +823,8 @@ static M6522VIAOps bbc_system_via_ops = {
 		.output = bbc_addressable_latch_write,
 	},
 	.a = {
-		.input = bbc_slow_data,
+		.input = bbc_slow_data_read,
+		.output = bbc_slow_data_write,
 	},
 };
 
@@ -753,6 +834,7 @@ static const VMStateDescription vmstate_bbc_system_via = {
 	.version_id = 1,
 	.minimum_version_id = 1,
 	.fields = ( VMStateField[] ) {
+		VMSTATE_UINT8 ( slow_data, BBCSystemVIA ),
 		VMSTATE_UINT8 ( addressable_latch, BBCSystemVIA ),
 		VMSTATE_END_OF_LIST()
 	},
@@ -779,7 +861,7 @@ static BBCSystemVIA * bbc_system_via_init ( MemoryRegion *parent, hwaddr offset,
 				&bbc_system_via_ops, irq );
 
 	/* Initialise keyboard */
-	qemu_add_kbd_event_handler ( bbc_kbd_event, via );
+	qemu_add_kbd_event_handler ( bbc_keyboard_event, via );
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, offset, &vmstate_bbc_system_via, via );
