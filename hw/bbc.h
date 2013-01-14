@@ -233,6 +233,18 @@ typedef struct {
 
 #include "bbc_crt.h"
 
+/** IRQ interrupt sources */
+enum bbc_irq_sources {
+	BBC_IRQ_SYSTEM_VIA,
+	BBC_IRQ_USER_VIA,
+	BBC_IRQ_COUNT
+};
+
+/** NMI interrupt sources */
+enum bbc_nmi_sources {
+	BBC_NMI_COUNT
+};
+
 /**
  * BBC Micro
  */
@@ -247,10 +259,14 @@ typedef struct {
 	BBCROM *mos;
 	/** Paged ROM */
 	BBCPagedROM *paged;
-	/** Maskable interrupt */
-	qemu_irq irq;
+	/** Maskable interrupts */
+	qemu_irq *irq;
+	/** Maskable interrupt status */
+	bool irq_active[BBC_IRQ_COUNT];
 	/** Non-maskable interrupt */
-	qemu_irq nmi;
+	qemu_irq *nmi;
+	/** Non-maskable interrupt status */
+	bool nmi_active[BBC_NMI_COUNT];
 	/** FRED */
 	BBCFRED *fred;
 	/** JIM */

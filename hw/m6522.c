@@ -159,11 +159,84 @@ static void m6522_ier_write ( M6522VIA *via, uint8_t data ) {
 	m6522_update_irq ( via );
 }
 
+/**
+ * Handle control line 1 interrupt
+ *
+ * @v opaque		Port
+ * @v n			Interrupt number
+ * @v level		Interrupt level
+ */
+static void m6522_c1_irq ( void *opaque, int n, int level ) {
+	M6522VIAPort *port = opaque;
+	M6522VIA *via = port->via;
+	unsigned int pcr = ( via->pcr >> port->pcr_shift );
+
+	/* Do nothing unless level has changed */
+	level = ( !! level );
+	if ( level == port->c1.previous )
+		return;
+	port->c1.previous = level;
+	LOG_M6522 ( "%s: C%s1 %s\n", via->name, port->name,
+		    ( level ? "high" : "low" ) );
+
+	/* Assert interrupt if new level matches sensitive edge */
+	if ( level == ( !! ( pcr & M6522_PCR_C1_POSITIVE ) ) )
+		m6522_set_interrupts ( via, port->c1.ifr );
+}
+
+/**
+ * Handle control line 2 interrupt
+ *
+ * @v opaque		Port
+ * @v n			Interrupt number
+ * @v level		Interrupt level
+ */
+static void m6522_c2_irq ( void *opaque, int n, int level ) {
+	M6522VIAPort *port = opaque;
+	M6522VIA *via = port->via;
+	unsigned int pcr = ( via->pcr >> port->pcr_shift );
+
+	/* Do nothing if line is configured as an output */
+	if ( pcr & M6522_PCR_C2_OUTPUT )
+		return;
+
+	/* Do nothing unless level has changed */
+	level = ( !! level );
+	if ( level == port->c2.previous )
+		return;
+	port->c2.previous = level;
+	LOG_M6522 ( "%s: C%s2 %s\n", via->name, port->name,
+		    ( level ? "high" : "low" ) );
+
+	/* Assert interrupt if new level matches sensitive edge */
+	if ( level == ( !! ( pcr & M6522_PCR_C2_INPUT_POSITIVE ) ) )
+		m6522_set_interrupts ( via, port->c2.ifr );
+}
+
 /******************************************************************************
  *
  * Port I/O
  *
  */
+
+/**
+ * Clear interrupts in response to IRA/IRB read or ORA/ORB write
+ *
+ * @v via		6522 VIA
+ * @v port		Port
+ */
+static void m6522_iror_clear_interrupts ( M6522VIA *via, M6522VIAPort *port ) {
+	unsigned int pcr = ( via->pcr >> port->pcr_shift );
+
+	/* Always clear C1 interrupt */
+	m6522_clear_interrupts ( via, port->c1.ifr );
+
+	/* Clear C2 interrupt unless configured as an "independent" input */
+	if ( ( pcr & ( M6522_PCR_C2_OUTPUT | M6522_PCR_C2_INPUT_INDEPENDENT ) )
+	     != M6522_PCR_C2_INPUT_INDEPENDENT ) {
+		m6522_clear_interrupts ( via, port->c2.ifr );
+	}
+}
 
 /**
  * Read from 6522 VIA IRA/IRB
@@ -188,9 +261,8 @@ static uint8_t m6522_ir_read ( M6522VIA *via, M6522VIAPort *port,
 	}
 
 	/* Clear interrupts */
-	if ( handshake ) {
-		m6522_clear_interrupts ( via, ( port->ifr_c1 | port->ifr_c2 ) );
-	}
+	if ( handshake )
+		m6522_iror_clear_interrupts ( via, port );
 
 	LOG_M6522 ( "%s: IR%s%s=0x%02x\n", via->name, port->name,
 		    ( handshake ? "" : "_NO_HS" ), data );
@@ -219,9 +291,8 @@ static void m6522_or_write ( M6522VIA *via, M6522VIAPort *port, uint8_t data,
 		port->ops->output ( via->opaque, data );
 
 	/* Clear interrupts */
-	if ( handshake ) {
-		m6522_clear_interrupts ( via, ( port->ifr_c1 | port->ifr_c2 ) );
-	}
+	if ( handshake )
+		m6522_iror_clear_interrupts ( via, port );
 }
 
 /**
@@ -232,9 +303,12 @@ static void m6522_or_write ( M6522VIA *via, M6522VIAPort *port, uint8_t data,
  * @ret data		Data
  */
 static uint8_t m6522_ddr_read ( M6522VIA *via, M6522VIAPort *port ) {
+	uint8_t data;
 
 	/* Read data direction register */
-	return port->ddr;
+	data = port->ddr;
+
+	return data;
 }
 
 /**
@@ -435,6 +509,41 @@ static void m6522_sr_write ( M6522VIA *via, uint8_t data ) {
 
 /******************************************************************************
  *
+ * Peripheral control register
+ *
+ */
+
+/**
+ * Read from 6522 VIA PCR
+ *
+ * @v via		6522 VIA
+ * @ret data		Data
+ */
+static uint8_t m6522_pcr_read ( M6522VIA *via ) {
+	uint8_t data;
+
+	/* Read peripheral control register */
+	data = via->pcr;
+
+	return data;
+}
+
+/**
+ * Write to 6522 VIA PCR
+ *
+ * @v via		6522 VIA
+ * @v data		Data
+ */
+static void m6522_pcr_write ( M6522VIA *via, uint8_t data ) {
+
+	LOG_M6522 ( "%s: PCR=0x%02x\n", via->name, data );
+
+	/* Write peripheral control register */
+	via->pcr = data;
+}
+
+/******************************************************************************
+ *
  * VIA
  *
  */
@@ -485,6 +594,9 @@ static uint64_t m6522_read ( void *opaque, hwaddr addr, unsigned int size ) {
 		break;
 	case M6522_SR:
 		data = m6522_sr_read ( via );
+		break;
+	case M6522_PCR:
+		data = m6522_pcr_read ( via );
 		break;
 	case M6522_IER:
 		data = m6522_ier_read ( via );
@@ -552,6 +664,9 @@ static void m6522_write ( void *opaque, hwaddr addr, uint64_t data64,
 		break;
 	case M6522_SR:
 		m6522_sr_write ( via, data );
+		break;
+	case M6522_PCR:
+		m6522_pcr_write ( via, data );
 		break;
 	case M6522_IFR:
 		m6522_ifr_write ( via, data );
@@ -621,20 +736,26 @@ M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
 	via->irq = irq;
 
 	/* Initialise ports */
+	via->a.via = via;
+	via->b.via = via;
 	via->a.name = "A";
 	via->b.name = "B";
-	via->a.ifr_c2 = M6522_INT_CA1;
-	via->a.ifr_c2 = M6522_INT_CA2;
-	via->b.ifr_c1 = M6522_INT_CB1;
-	via->b.ifr_c1 = M6522_INT_CB2;
 	via->a.ops = &ops->a;
 	via->b.ops = &ops->b;
-	//	via->a.c1_irq = qemu_allocate_irqs ( m6522_ca1_irq, via, 1 )[0];
-	//	via->a.c2_irq = qemu_allocate_irqs ( m6522_ca2_irq, via, 1 )[0];
-	//	via->b.c1_irq = qemu_allocate_irqs ( m6522_cb1_irq, via, 1 )[0];
-	//	via->b.c2_irq = qemu_allocate_irqs ( m6522_cb2_irq, via, 1 )[0];
+	via->a.pcr_shift = M6522_PCR_CA_SHIFT;
+	via->b.pcr_shift = M6522_PCR_CB_SHIFT;
+	via->a.c1.ifr = M6522_INT_CA1;
+	via->a.c2.ifr = M6522_INT_CA2;
+	via->b.c1.ifr = M6522_INT_CB1;
+	via->b.c2.ifr = M6522_INT_CB2;
+	via->a.c1.irq = qemu_allocate_irqs ( m6522_c1_irq, &via->a, 1 )[0];
+	via->b.c1.irq = qemu_allocate_irqs ( m6522_c1_irq, &via->b, 1 )[0];
+	via->a.c2.irq = qemu_allocate_irqs ( m6522_c2_irq, &via->a, 1 )[0];
+	via->b.c2.irq = qemu_allocate_irqs ( m6522_c2_irq, &via->b, 1 )[0];
 
 	/* Initialise timers */
+	via->t1.via = via;
+	via->t2.via = via;
 	via->t1.name = "1";
 	via->t2.name = "2";
 	via->t1.ifr = M6522_INT_T1;

@@ -576,8 +576,8 @@ static void bbc_kbd_event ( void *opaque, int keycode ) {
 	/* Update number of interrupting keys and update interrupt request */
 	if ( BBC_KEY_CAN_INTERRUPT ( key->row ) ) {
 		via->interrupting_keys += ( pressed ? 1 : -1 );
-		//		qemu_set_irq ( via->via->a.c2_irq,
-		//			       ( via->interrupting_keys > 0 ) );
+		qemu_set_irq ( via->via->a.c2.irq,
+			       ( via->interrupting_keys > 0 ) );
 	}
 
 	// break key is a hardwired reset on BBC!
@@ -946,12 +946,15 @@ static BBCJIM * bbc_jim_init ( MemoryRegion *parent, hwaddr offset,
  * @v parent		Parent memory region
  * @v offset		Offset within parent memory region
  * @v name		Device name
- * @v irq		Interrupt request line
+ * @v paged		Paged ROM
+ * @v system_via_irq	System VIA interrupt request line
+ * @v user_via_irq	User VIA interrupt request line
  * @ret sheila		SHEILA
  */
 static BBCSHEILA * bbc_sheila_init ( MemoryRegion *parent, hwaddr offset,
 				     const char *name, BBCPagedROM *paged,
-				     qemu_irq irq ) {
+				     qemu_irq system_via_irq,
+				     qemu_irq user_via_irq ) {
 	BBCSHEILA *sheila = g_new0 ( BBCSHEILA, 1 );
 
 	/* Initialise SHEILA */
@@ -991,11 +994,11 @@ static BBCSHEILA * bbc_sheila_init ( MemoryRegion *parent, hwaddr offset,
 	sheila->system_via =
 		bbc_system_via_init ( &sheila->mr, BBC_SHEILA_SYSTEM_VIA_BASE,
 				      BBC_SHEILA_SYSTEM_VIA_SIZE,
-				      "system_via", irq );
+				      "system_via", system_via_irq );
 	sheila->user_via =
 		bbc_user_via_init ( &sheila->mr, BBC_SHEILA_USER_VIA_BASE,
 				    BBC_SHEILA_USER_VIA_SIZE,
-				    "user_via", irq );
+				    "user_via", user_via_irq );
 
 	return sheila;
 }
@@ -1005,6 +1008,41 @@ static BBCSHEILA * bbc_sheila_init ( MemoryRegion *parent, hwaddr offset,
  * Interrupts
  *
  */
+
+/**
+ * Interrupt handler
+ *
+ * @v bbc		BBC Micro
+ * @v active		Interrupt set status
+ * @v count		Number of interrupts within set
+ * @v cpu_irq_type	CPU interrupt type
+ * @v n			Interrupt number
+ * @v level		Interrupt level
+ */
+static void bbc_interrupt ( BBCMicro *bbc, bool *active, unsigned int count,
+			    int cpu_irq_type, int n, int level ) {
+	unsigned int i;
+
+	/* Record status of this interrupt */
+	active[n] = level;
+
+	/* If this interrupt is active, assert the CPU interrupt */
+	if ( level ) {
+		cpu_interrupt ( bbc->cpu, cpu_irq_type );
+		return;
+	}
+
+	/* Otherwise, if any interrupt is active, leave the CPU
+	 * interrupt asserted.
+	 */
+	for ( i = 0 ; i < count ; i++ ) {
+		if ( active[i] )
+			return;
+	}
+
+	/* Otherwise, deassert the CPU interrupt */
+	cpu_reset_interrupt ( bbc->cpu, cpu_irq_type );
+}
 
 /**
  * IRQ handler
@@ -1017,11 +1055,8 @@ static void bbc_irq_handler ( void *opaque, int n, int level ) {
 	BBCMicro *bbc = opaque;
 
 	/* Control CPU IRQ pin */
-	if ( level ) {
-		cpu_interrupt ( bbc->cpu, CPU_INTERRUPT_HARD );
-	} else {
-		cpu_reset_interrupt ( bbc->cpu, CPU_INTERRUPT_HARD );
-	}
+	bbc_interrupt ( bbc, bbc->irq_active, BBC_IRQ_COUNT,
+			CPU_INTERRUPT_HARD, n, level );
 }
 
 /**
@@ -1035,11 +1070,8 @@ static void bbc_nmi_handler ( void *opaque, int n, int level ) {
 	BBCMicro *bbc = opaque;
 
 	/* Control CPU NMI pin */
-	if ( level ) {
-		cpu_interrupt ( bbc->cpu, CPU_INTERRUPT_NMI );
-	} else {
-		cpu_reset_interrupt ( bbc->cpu, CPU_INTERRUPT_NMI );
-	}
+	bbc_interrupt ( bbc, bbc->nmi_active, BBC_NMI_COUNT,
+			CPU_INTERRUPT_NMI, n, level );
 }
 
 /**
@@ -1049,9 +1081,9 @@ static void bbc_nmi_handler ( void *opaque, int n, int level ) {
  */
 static void bbc_interrupts_init ( BBCMicro *bbc ) {
 
-	/* Allocate IRQ and NMI interrupts */
-	bbc->irq = qemu_allocate_irqs ( bbc_irq_handler, bbc, 1 )[0];
-	bbc->nmi = qemu_allocate_irqs ( bbc_nmi_handler, bbc, 1 )[0];
+	/* Allocate IRQ and NMI interrupts and set inactive (high) */
+	bbc->irq = qemu_allocate_irqs ( bbc_irq_handler, bbc, BBC_IRQ_COUNT );
+	bbc->nmi = qemu_allocate_irqs ( bbc_nmi_handler, bbc, BBC_NMI_COUNT );
 }
 
 /******************************************************************************
@@ -1217,7 +1249,9 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 	bbc->fred = bbc_fred_init ( address_space_mem, BBC_FRED_BASE, "fred" );
 	bbc->jim = bbc_jim_init ( address_space_mem, BBC_JIM_BASE, "jim" );
 	bbc->sheila = bbc_sheila_init ( address_space_mem, BBC_SHEILA_BASE,
-					"sheila", bbc->paged, bbc->irq );
+					"sheila", bbc->paged,
+					bbc->irq[BBC_IRQ_SYSTEM_VIA],
+					bbc->irq[BBC_IRQ_USER_VIA] );
 
 	/* Initialise display */
 	bbc->crt = bbc_crt_init ( "crt", &bbc->ram, bbc->sheila->crtc,

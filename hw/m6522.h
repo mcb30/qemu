@@ -21,8 +21,6 @@
 #define HW_M6522_H
 
 typedef struct M6522VIA M6522VIA;
-typedef struct M6522VIAPort M6522VIAPort;
-typedef struct M6522VIATimer M6522VIATimer;
 
 /** 6522 VIA port operations */
 typedef struct {
@@ -50,29 +48,48 @@ typedef struct {
 	M6522VIAPortOps b;
 } M6522VIAOps;
 
+/** A 6522 VIA control line */
+typedef struct {
+	/** IRQ */
+	qemu_irq irq;
+	/** Previous state of control line input */
+	int previous;
+	/** Interrupt flag bit */
+	uint8_t ifr;
+} M6522ViaControl;
+
 /** A 6522 VIA port */
-struct M6522VIAPort {
+typedef struct {
+	/** Containing VIA */
+	M6522VIA *via;
 	/** Name */
 	const char *name;
 	/** Operations */
 	const M6522VIAPortOps *ops;
-	/** Interrupt flag bit for control line 1 */
-	uint8_t ifr_c1;
-	/** Interrupt flag bit for control line 2 */
-	uint8_t ifr_c2;
-	/** IRQ 1 */
-	qemu_irq c1_irq;
-	/** IRQ 2 */
+	/** PCR shift */
+	unsigned int pcr_shift;
+	/** Control line 1 */
+	M6522ViaControl c1;
+	/** Control line 2 */
+	M6522ViaControl c2;
+
+	/** IRQ for control line 2 */
 	qemu_irq c2_irq;
+	/** Previous state of control line 2 input */
+	int c2_prev;
+	/** Interrupt flag bit for control line 2 */
+	uint8_t c2_ifr;
 
 	/** Output register */
 	uint8_t or;
 	/** Data direction register */
 	uint8_t ddr;
-};
+} M6522VIAPort;
 
 /** A 6522 VIA timer */
-struct M6522VIATimer {
+typedef struct {
+	/** Containing VIA */
+	M6522VIA *via;
 	/** Name */
 	const char *name;
 	/** Interrupt flag bit */
@@ -82,7 +99,7 @@ struct M6522VIATimer {
 	uint16_t l;
 	/** Counter */
 	uint16_t c;
-};
+} M6522VIATimer;
 
 /** A 6522 VIA */
 struct M6522VIA {
@@ -149,9 +166,16 @@ struct M6522VIA {
 #define M6522_INT_T1 0x40
 #define M6522_INT_IRQ 0x80
 
-/* Interrupt combinations */
-#define M6522_INT_CA_BOTH ( M6522_INT_CA1 | M6522_INT_CA2 )
-#define M6522_INT_CB_BOTH ( M6522_INT_CB1 | M6522_INT_CB2 )
+/* Peripheral control register */
+#define M6522_PCR_CA_SHIFT 0
+#define M6522_PCR_CB_SHIFT 4
+#define M6522_PCR_C1_POSITIVE 0x01
+#define M6522_PCR_C2_INPUT_INDEPENDENT 0x02
+#define M6522_PCR_C2_OUTPUT_PULSE 0x02
+#define M6522_PCR_C2_OUTPUT_FIXED_LEVEL 0x02
+#define M6522_PCR_C2_INPUT_POSITIVE 0x04
+#define M6522_PCR_C2_OUTPUT_FIXED 0x04
+#define M6522_PCR_C2_OUTPUT 0x08
 
 extern M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset,
 			       uint64_t size, const char *name, void *opaque,
