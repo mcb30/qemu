@@ -44,16 +44,27 @@ typedef struct {
 
 /** 6522 VIA operations */
 typedef struct {
-	/** Port B operations */
-	M6522VIAPortOps b;
 	/** Port A operations */
 	M6522VIAPortOps a;
+	/** Port B operations */
+	M6522VIAPortOps b;
 } M6522VIAOps;
 
 /** A 6522 VIA port */
 struct M6522VIAPort {
+	/** Name */
+	const char *name;
 	/** Operations */
 	const M6522VIAPortOps *ops;
+	/** Interrupt flag bit for control line 1 */
+	uint8_t ifr_c1;
+	/** Interrupt flag bit for control line 2 */
+	uint8_t ifr_c2;
+	/** IRQ 1 */
+	qemu_irq c1_irq;
+	/** IRQ 2 */
+	qemu_irq c2_irq;
+
 	/** Output register */
 	uint8_t or;
 	/** Data direction register */
@@ -62,6 +73,11 @@ struct M6522VIAPort {
 
 /** A 6522 VIA timer */
 struct M6522VIATimer {
+	/** Name */
+	const char *name;
+	/** Interrupt flag bit */
+	uint8_t ifr;
+
 	/** Latches */
 	uint16_t l;
 	/** Counter */
@@ -79,10 +95,10 @@ struct M6522VIA {
 	/** Opaque pointer */
 	void *opaque;
 
-	/** Port B */
-	M6522VIAPort b;
 	/** Port A */
 	M6522VIAPort a;
+	/** Port B */
+	M6522VIAPort b;
 	/** Timer 1 */
 	M6522VIATimer t1;
 	/** Timer 2 */

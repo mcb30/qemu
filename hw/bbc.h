@@ -150,6 +150,10 @@ typedef struct {
 	M6522VIA *via;
 	/** Stored keycode prefix */
 	int keycode_prefix;
+	/** Keys currently pressed */
+	bool key_pressed[10][8];
+	/** Number of interrupting keys currently pressed */
+	unsigned int interrupting_keys;
 
 	/** Addressable latch */
 	uint8_t addressable_latch;

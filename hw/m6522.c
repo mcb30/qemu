@@ -166,13 +166,15 @@ static void m6522_ier_write ( M6522VIA *via, uint8_t data ) {
  */
 
 /**
- * Input from 6522 VIA port
+ * Read from 6522 VIA IRA/IRB
  *
  * @v via		6522 VIA
  * @v port		Port
- * @ret data		Output data
+ * @v handshake		Handshaking enabled
+ * @ret data		Data
  */
-static uint8_t m6522_input ( M6522VIA *via, M6522VIAPort *port ) {
+static uint8_t m6522_ir_read ( M6522VIA *via, M6522VIAPort *port,
+			       int handshake ) {
 	uint8_t data;
 
 	/* Input from port */
@@ -185,17 +187,29 @@ static uint8_t m6522_input ( M6522VIA *via, M6522VIAPort *port ) {
 		data = ( ( data & ~port->ddr ) | ( port->or & port->ddr ) );
 	}
 
+	/* Clear interrupts */
+	if ( handshake ) {
+		m6522_clear_interrupts ( via, ( port->ifr_c1 | port->ifr_c2 ) );
+	}
+
+	LOG_M6522 ( "%s: IR%s%s=0x%02x\n", via->name, port->name,
+		    ( handshake ? "" : "_NO_HS" ), data );
 	return data;
 }
 
 /**
- * Output to 6522 VIA port
+ * Write to 6522 VIA ORA/ORB
  *
  * @v via		6522 VIA
  * @v port		Port
- * @v data		Output data
+ * @v data		Data
+ * @v handshake		Handshaking enabled
  */
-static void m6522_output ( M6522VIA *via, M6522VIAPort *port, uint8_t data ) {
+static void m6522_or_write ( M6522VIA *via, M6522VIAPort *port, uint8_t data,
+			     int handshake ) {
+
+	LOG_M6522 ( "%s: OR%s%s=0x%02x\n", via->name, port->name,
+		    ( handshake ? "" : "_NO_HS" ), data );
 
 	/* Update stored OR */
 	port->or = data;
@@ -203,152 +217,40 @@ static void m6522_output ( M6522VIA *via, M6522VIAPort *port, uint8_t data ) {
 	/* Output to port */
 	if ( port->ops->output )
 		port->ops->output ( via->opaque, data );
+
+	/* Clear interrupts */
+	if ( handshake ) {
+		m6522_clear_interrupts ( via, ( port->ifr_c1 | port->ifr_c2 ) );
+	}
 }
 
 /**
- * Read from 6522 VIA IRB
+ * Read from 6522 VIA DDRA/DDRB
  *
  * @v via		6522 VIA
+ * @v port		Port
  * @ret data		Data
  */
-static uint8_t m6522_irb_read ( M6522VIA *via ) {
-	uint8_t data;
-
-	/* Read from port and clear interrupts */
-	data = m6522_input ( via, &via->b );
-	m6522_clear_interrupts ( via, M6522_INT_CB_BOTH );
-
-	LOG_M6522 ( "%s: IRB=0x%02x\n", via->name, data );
-	return data;
-}
-
-/**
- * Read from 6522 VIA IRA
- *
- * @v via		6522 VIA
- * @ret data		Data
- */
-static uint8_t m6522_ira_read ( M6522VIA *via ) {
-	uint8_t data;
-
-	/* Read from port and clear interrupts */
-	data = m6522_input ( via, &via->a );
-	m6522_clear_interrupts ( via, M6522_INT_CA_BOTH );
-
-	LOG_M6522 ( "%s: IRA=0x%02x\n", via->name, data );
-	return data;
-}
-
-/**
- * Read from 6522 VIA IRA_NO_HS
- *
- * @v via		6522 VIA
- * @ret data		Data
- */
-static uint8_t m6522_ira_no_hs_read ( M6522VIA *via ) {
-	uint8_t data;
-
-	/* Read from port but do not clear interrupts */
-	data = m6522_input ( via, &via->a );
-
-	LOG_M6522 ( "%s: IRA_NO_HS=0x%02x\n", via->name, data );
-	return data;
-}
-
-/**
- * Write to 6522 VIA ORB
- *
- * @v via		6522 VIA
- * @v data		Data
- */
-static void m6522_orb_write ( M6522VIA *via, uint8_t data ) {
-
-	LOG_M6522 ( "%s: ORB=0x%02x\n", via->name, data );
-
-	/* Write to port and clear interrupts */
-	m6522_output ( via, &via->b, data );
-	m6522_clear_interrupts ( via, M6522_INT_CB_BOTH );
-}
-
-/**
- * Write to 6522 VIA ORA
- *
- * @v via		6522 VIA
- * @v data		Data
- */
-static void m6522_ora_write ( M6522VIA *via, uint8_t data ) {
-
-	LOG_M6522 ( "%s: ORA=0x%02x\n", via->name, data );
-
-	/* Write to port and clear interrupts */
-	m6522_output ( via, &via->a, data );
-	m6522_clear_interrupts ( via, M6522_INT_CA_BOTH );
-}
-
-/**
- * Write to 6522 VIA ORA_NO_HS
- *
- * @v via		6522 VIA
- * @v data		Data
- */
-static void m6522_ora_no_hs_write ( M6522VIA *via, uint8_t data ) {
-
-	LOG_M6522 ( "%s: ORA=0x%02x\n", via->name, data );
-
-	/* Write to port but do not clear interrupts */
-	m6522_output ( via, &via->a, data );
-}
-
-/**
- * Read from 6522 VIA DDRB
- *
- * @v via		6522 VIA
- * @ret data		Data
- */
-static uint8_t m6522_ddrb_read ( M6522VIA *via ) {
+static uint8_t m6522_ddr_read ( M6522VIA *via, M6522VIAPort *port ) {
 
 	/* Read data direction register */
-	return via->b.ddr;
+	return port->ddr;
 }
 
 /**
- * Read from 6522 VIA DDRA
+ * Write to 6522 VIA DDRA/DDRB
  *
  * @v via		6522 VIA
- * @ret data		Data
- */
-static uint8_t m6522_ddra_read ( M6522VIA *via ) {
-
-	/* Read data direction register */
-	return via->a.ddr;
-}
-
-/**
- * Write to 6522 VIA DDRB
- *
- * @v via		6522 VIA
+ * @v port		Port
  * @v data		Data
  */
-static void m6522_ddrb_write ( M6522VIA *via, uint8_t data ) {
+static void m6522_ddr_write ( M6522VIA *via, M6522VIAPort *port,
+			      uint8_t data ) {
 
-	LOG_M6522 ( "%s: DDRB=0x%02x\n", via->name, data );
-
-	/* Write data direction register */
-	via->b.ddr = data;
-}
-
-/**
- * Write to 6522 VIA DDRA
- *
- * @v via		6522 VIA
- * @v data		Data
- */
-static void m6522_ddra_write ( M6522VIA *via, uint8_t data ) {
-
-	LOG_M6522 ( "%s: DDRA=0x%02x\n", via->name, data );
+	LOG_M6522 ( "%s: DDR%s=0x%02x\n", via->name, port->name, data );
 
 	/* Write data direction register */
-	via->a.ddr = data;
+	port->ddr = data;
 }
 
 /******************************************************************************
@@ -358,25 +260,6 @@ static void m6522_ddra_write ( M6522VIA *via, uint8_t data ) {
  */
 
 /**
- * Start timer
- *
- * @v via		6522 VIA
- * @v timer		Timer
- */
-static void m6522_timer_start ( M6522VIA *via, M6522VIATimer *timer ) {
-
-	/* Load counter low byte from latches */
-	timer->c &= ~0xff;
-	timer->c |= ( timer->l & 0xff );
-
-	//
-	m6522_set_interrupts ( via, M6522_INT_T1 );
-
-	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented timer start 0x%04x\n",
-			via->name, timer->c );
-}
-
-/**
  * Read from 6522 VIA timer latch low byte
  *
  * @v via		6522 VIA
@@ -384,8 +267,12 @@ static void m6522_timer_start ( M6522VIA *via, M6522VIATimer *timer ) {
  * @ret data		Data
  */
 static uint8_t m6522_latch_read_low ( M6522VIA *via, M6522VIATimer *timer ) {
+	uint8_t data;
 
-	return ( ( timer->l >> 0 ) & 0xff );
+	/* Read latch low byte */
+	data = ( ( timer->l >> 0 ) & 0xff );
+
+	return data;
 }
 
 /**
@@ -396,8 +283,12 @@ static uint8_t m6522_latch_read_low ( M6522VIA *via, M6522VIATimer *timer ) {
  * @ret data		Data
  */
 static uint8_t m6522_latch_read_high ( M6522VIA *via, M6522VIATimer *timer ) {
+	uint8_t data;
 
-	return ( ( timer->l >> 8 ) & 0xff );
+	/* Read latch high byte */
+	data = ( ( timer->l >> 8 ) & 0xff );
+
+	return data;
 }
 
 /**
@@ -408,8 +299,15 @@ static uint8_t m6522_latch_read_high ( M6522VIA *via, M6522VIATimer *timer ) {
  * @ret data		Data
  */
 static uint8_t m6522_counter_read_low ( M6522VIA *via, M6522VIATimer *timer ) {
+	uint8_t data;
 
-	return ( ( timer->c >> 0 ) & 0xff );
+	/* Read counter low byte */
+	data = ( ( timer->c >> 0 ) & 0xff );
+
+	/* Clear interrupt */
+	m6522_clear_interrupts ( via, timer->ifr );
+
+	return data;
 }
 
 /**
@@ -420,8 +318,12 @@ static uint8_t m6522_counter_read_low ( M6522VIA *via, M6522VIATimer *timer ) {
  * @ret data		Data
  */
 static uint8_t m6522_counter_read_high ( M6522VIA *via, M6522VIATimer *timer ) {
+	uint8_t data;
 
-	return ( ( timer->c >> 8 ) & 0xff );
+	/* Read counter high byte */
+	data = ( ( timer->c >> 8 ) & 0xff );
+
+	return data;
 }
 
 /**
@@ -434,7 +336,9 @@ static uint8_t m6522_counter_read_high ( M6522VIA *via, M6522VIATimer *timer ) {
 static void m6522_latch_write_low ( M6522VIA *via, M6522VIATimer *timer,
 				    uint8_t data ) {
 
-	/* Update latch value */
+	LOG_M6522 ( "%s: T%sL_L=0x%02x\n", via->name, timer->name, data );
+
+	/* Update latch low byte */
 	timer->l &= ~0xff;
 	timer->l |= data;
 }
@@ -449,9 +353,14 @@ static void m6522_latch_write_low ( M6522VIA *via, M6522VIATimer *timer,
 static void m6522_latch_write_high ( M6522VIA *via, M6522VIATimer *timer,
 				     uint8_t data ) {
 
-	/* Update latch value */
+	LOG_M6522 ( "%s: T%sL_H=0x%02x\n", via->name, timer->name, data );
+
+	/* Update latch high byte */
 	timer->l &= ~0xff00;
 	timer->l |= ( data << 8 );
+
+	/* Clear interrupt */
+	m6522_clear_interrupts ( via, timer->ifr );
 }
 
 /**
@@ -464,167 +373,27 @@ static void m6522_latch_write_high ( M6522VIA *via, M6522VIATimer *timer,
 static void m6522_counter_write_high ( M6522VIA *via, M6522VIATimer *timer,
 				       uint8_t data ) {
 
-	/* Update counter value */
+	LOG_M6522 ( "%s: T%sC_H=0x%02x\n", via->name, timer->name, data );
+
+	/* Update counter high byte */
 	timer->c &= ~0xff00;
 	timer->c |= ( data << 8 );
-}
 
-/**
- * Read from 6522 VIA T1C_L
- *
- * @v via		6522 VIA
- * @ret data		Data
- */
-static uint8_t m6522_t1c_l_read ( M6522VIA *via ) {
+	/* Update latch high byte (T1 only) */
+	if ( timer == &via->t1 ) {
+		timer->l &= ~0xff00;
+		timer->l |= ( data << 8 );
+	}
 
-	/* Read counter and clear interrupts */
-	m6522_clear_interrupts ( via, M6522_INT_T1 );
-	return m6522_counter_read_low ( via, &via->t1 );
-}
+	/* Load counter from latch */
+	timer->c = timer->l;
 
-/**
- * Read from 6522 VIA T1C_H
- *
- * @v via		6522 VIA
- * @ret data		Data
- */
-static uint8_t m6522_t1c_h_read ( M6522VIA *via ) {
+	/* Clear interrupts */
+	m6522_clear_interrupts ( via, timer->ifr );
 
-	/* Read counter */
-	return m6522_counter_read_high ( via, &via->t1 );
-}
-
-/**
- * Read from 6522 VIA T1L_L
- *
- * @v via		6522 VIA
- * @ret data		Data
- */
-static uint8_t m6522_t1l_l_read ( M6522VIA *via ) {
-
-	/* Read latches */
-	return m6522_latch_read_low ( via, &via->t1 );
-}
-
-/**
- * Read from 6522 VIA T1L_H
- *
- * @v via		6522 VIA
- * @ret data		Data
- */
-static uint8_t m6522_t1l_h_read ( M6522VIA *via ) {
-
-	/* Read latches */
-	return m6522_latch_read_high ( via, &via->t1 );
-}
-
-/**
- * Read from 6522 VIA T2C_L
- *
- * @v via		6522 VIA
- * @ret data		Data
- */
-static uint8_t m6522_t2c_l_read ( M6522VIA *via ) {
-
-	/* Read counter and clear interrupts */
-	m6522_clear_interrupts ( via, M6522_INT_T2 );
-	return m6522_counter_read_low ( via, &via->t2 );
-}
-
-/**
- * Read from 6522 VIA T2C_H
- *
- * @v via		6522 VIA
- * @ret data		Data
- */
-static uint8_t m6522_t2c_h_read ( M6522VIA *via ) {
-
-	/* Read counter */
-	return m6522_counter_read_high ( via, &via->t2 );
-}
-
-/**
- * Write to 6522 VIA T1C_L
- *
- * @v via		6522 VIA
- * @v data		Data
- */
-static void m6522_t1c_l_write ( M6522VIA *via, uint8_t data ) {
-
-	/* Write latches (not counter) */
-	LOG_M6522 ( "%s: T1C_L=0x%02x\n", via->name, data );
-	m6522_latch_write_low ( via, &via->t1, data );
-}
-
-/**
- * Write to 6522 VIA T1C_H
- *
- * @v via		6522 VIA
- * @v data		Data
- */
-static void m6522_t1c_h_write ( M6522VIA *via, uint8_t data ) {
-
-	/* Write latches, and counter, clear interrupts, and start timer */
-	LOG_M6522 ( "%s: T1C_H=0x%02x\n", via->name, data );
-	m6522_latch_write_high ( via, &via->t1, data );
-	m6522_counter_write_high ( via, &via->t1, data );
-	m6522_clear_interrupts ( via, M6522_INT_T1 );
-	m6522_timer_start ( via, &via->t1 );
-}
-
-/**
- * Write to 6522 VIA T1L_L
- *
- * @v via		6522 VIA
- * @v data		Data
- */
-static void m6522_t1l_l_write ( M6522VIA *via, uint8_t data ) {
-
-	/* Write latches */
-	LOG_M6522 ( "%s: T1L_L=0x%02x\n", via->name, data );
-	m6522_latch_write_low ( via, &via->t1, data );
-}
-
-/**
- * Write to 6522 VIA T1L_H
- *
- * @v via		6522 VIA
- * @v data		Data
- */
-static void m6522_t1l_h_write ( M6522VIA *via, uint8_t data ) {
-
-	/* Write latches, clear interrupts, do not start timer */
-	LOG_M6522 ( "%s: T1L_H=0x%02x\n", via->name, data );
-	m6522_latch_write_high ( via, &via->t1, data );
-	m6522_clear_interrupts ( via, M6522_INT_T1 );
-}
-
-/**
- * Write to 6522 VIA T2C_L
- *
- * @v via		6522 VIA
- * @v data		Data
- */
-static void m6522_t2c_l_write ( M6522VIA *via, uint8_t data ) {
-
-	/* Write latches (not counter) */
-	LOG_M6522 ( "%s: T2C_L=0x%02x\n", via->name, data );
-	m6522_latch_write_low ( via, &via->t2, data );
-}
-
-/**
- * Write to 6522 VIA T2C_H
- *
- * @v via		6522 VIA
- * @v data		Data
- */
-static void m6522_t2c_h_write ( M6522VIA *via, uint8_t data ) {
-
-	/* Write counter, clear interrupts, and start timer */
-	LOG_M6522 ( "%s: T2C_H=0x%02x\n", via->name, data );
-	m6522_counter_write_high ( via, &via->t2, data );
-	m6522_clear_interrupts ( via, M6522_INT_T2 );
-	m6522_timer_start ( via, &via->t2 );
+	/* Start timer */
+	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented timer start 0x%04x\n",
+			via->name, timer->c );
 }
 
 /******************************************************************************
@@ -679,34 +448,61 @@ static void m6522_sr_write ( M6522VIA *via, uint8_t data ) {
  * @ret data		Read data
  */
 static uint64_t m6522_read ( void *opaque, hwaddr addr, unsigned int size ) {
-	static const M6522VIARegRead read_ops[M6522_SIZE] = {
-		[M6522_IRB] = m6522_irb_read,
-		[M6522_IRA] = m6522_ira_read,
-		[M6522_DDRB] = m6522_ddrb_read,
-		[M6522_DDRA] = m6522_ddra_read,
-		[M6522_T1C_L] = m6522_t1c_l_read,
-		[M6522_T1C_H] = m6522_t1c_h_read,
-		[M6522_T1L_L] = m6522_t1l_l_read,
-		[M6522_T1L_H] = m6522_t1l_h_read,
-		[M6522_T2C_L] = m6522_t2c_l_read,
-		[M6522_T2C_H] = m6522_t2c_h_read,
-		[M6522_SR] = m6522_sr_read,
-		[M6522_IFR] = m6522_ifr_read,
-		[M6522_IER] = m6522_ier_read,
-		[M6522_IRA_NO_HS] = m6522_ira_no_hs_read,
-	};
 	M6522VIA *via = opaque;
-	M6522VIARegRead read;
+	uint8_t data;
 
 	/* Read from specified register */
-	read = read_ops[ addr & ( M6522_SIZE - 1 ) ];
-	if ( read ) {
-		return read ( via );
-	} else {
+	switch ( addr & ( M6522_SIZE - 1 ) ) {
+	case M6522_IRB:
+		data = m6522_ir_read ( via, &via->b, 1 );
+		break;
+	case M6522_IRA:
+		data = m6522_ir_read ( via, &via->a, 1 );
+		break;
+	case M6522_DDRB:
+		data = m6522_ddr_read ( via, &via->b );
+		break;
+	case M6522_DDRA:
+		data = m6522_ddr_read ( via, &via->a );
+		break;
+	case M6522_T1C_L:
+		data = m6522_counter_read_low ( via, &via->t1 );
+		break;
+	case M6522_T1C_H:
+		data = m6522_counter_read_high ( via, &via->t1 );
+		break;
+	case M6522_T1L_L:
+		data = m6522_latch_read_low ( via, &via->t1 );
+		break;
+	case M6522_T1L_H:
+		data = m6522_latch_read_high ( via, &via->t1 );
+		break;
+	case M6522_T2C_L:
+		data = m6522_counter_read_low ( via, &via->t2 );
+		break;
+	case M6522_T2C_H:
+		data = m6522_counter_read_high ( via, &via->t2 );
+		break;
+	case M6522_SR:
+		data = m6522_sr_read ( via );
+		break;
+	case M6522_IER:
+		data = m6522_ier_read ( via );
+		break;
+	case M6522_IFR:
+		data = m6522_ifr_read ( via );
+		break;
+	case M6522_IRA_NO_HS:
+		data = m6522_ir_read ( via, &via->a, 0 );
+		break;
+	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from "
 				"0x%02lx\n", via->name, addr );
-		return 0;
+		data = 0;
+		break;
 	}
+
+	return data;
 }
 
 /**
@@ -719,33 +515,57 @@ static uint64_t m6522_read ( void *opaque, hwaddr addr, unsigned int size ) {
  */
 static void m6522_write ( void *opaque, hwaddr addr, uint64_t data64,
 			  unsigned int size ) {
-	static const M6522VIARegWrite write_ops[M6522_SIZE] = {
-		[M6522_ORB] = m6522_orb_write,
-		[M6522_ORA] = m6522_ora_write,
-		[M6522_DDRB] = m6522_ddrb_write,
-		[M6522_DDRA] = m6522_ddra_write,
-		[M6522_T1C_L] = m6522_t1c_l_write,
-		[M6522_T1C_H] = m6522_t1c_h_write,
-		[M6522_T1L_L] = m6522_t1l_l_write,
-		[M6522_T1L_H] = m6522_t1l_h_write,
-		[M6522_T2C_L] = m6522_t2c_l_write,
-		[M6522_T2C_H] = m6522_t2c_h_write,
-		[M6522_SR] = m6522_sr_write,
-		[M6522_IFR] = m6522_ifr_write,
-		[M6522_IER] = m6522_ier_write,
-		[M6522_ORA_NO_HS] = m6522_ora_no_hs_write,
-	};
 	M6522VIA *via = opaque;
 	uint8_t data = data64;
-	M6522VIARegWrite write;
 
 	/* Write to specified register */
-	write = write_ops[ addr & ( M6522_SIZE - 1 ) ];
-	if ( write ) {
-		write ( via, data );
-	} else {
+	switch ( addr & ( M6522_SIZE - 1 ) ) {
+	case M6522_ORB:
+		m6522_or_write ( via, &via->b, data, 1 );
+		break;
+	case M6522_ORA:
+		m6522_or_write ( via, &via->a, data, 1 );
+		break;
+	case M6522_DDRB:
+		m6522_ddr_write ( via, &via->b, data );
+		break;
+	case M6522_DDRA:
+		m6522_ddr_write ( via, &via->a, data );
+		break;
+	case M6522_T1C_L:
+		m6522_latch_write_low ( via, &via->t1, data );
+		break;
+	case M6522_T1C_H:
+		m6522_counter_write_high ( via, &via->t1, data );
+		break;
+	case M6522_T1L_L:
+		m6522_latch_write_low ( via, &via->t1, data );
+		break;
+	case M6522_T1L_H:
+		m6522_latch_write_high ( via, &via->t1, data );
+		break;
+	case M6522_T2C_L:
+		m6522_latch_write_low ( via, &via->t2, data );
+		break;
+	case M6522_T2C_H:
+		m6522_counter_write_high ( via, &via->t2, data );
+		break;
+	case M6522_SR:
+		m6522_sr_write ( via, data );
+		break;
+	case M6522_IFR:
+		m6522_ifr_write ( via, data );
+		break;
+	case M6522_IER:
+		m6522_ier_write ( via, data );
+		break;
+	case M6522_ORA_NO_HS:
+		m6522_or_write ( via, &via->a, data, 0 );
+		break;
+	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to "
 				"0x%02lx\n", via->name, data, addr );
+		break;
 	}
 }
 
@@ -798,9 +618,27 @@ M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
 	/* Initialise VIA */
 	via->name = name;
 	via->opaque = opaque;
-	via->b.ops = &ops->b;
-	via->a.ops = &ops->a;
 	via->irq = irq;
+
+	/* Initialise ports */
+	via->a.name = "A";
+	via->b.name = "B";
+	via->a.ifr_c2 = M6522_INT_CA1;
+	via->a.ifr_c2 = M6522_INT_CA2;
+	via->b.ifr_c1 = M6522_INT_CB1;
+	via->b.ifr_c1 = M6522_INT_CB2;
+	via->a.ops = &ops->a;
+	via->b.ops = &ops->b;
+	//	via->a.c1_irq = qemu_allocate_irqs ( m6522_ca1_irq, via, 1 )[0];
+	//	via->a.c2_irq = qemu_allocate_irqs ( m6522_ca2_irq, via, 1 )[0];
+	//	via->b.c1_irq = qemu_allocate_irqs ( m6522_cb1_irq, via, 1 )[0];
+	//	via->b.c2_irq = qemu_allocate_irqs ( m6522_cb2_irq, via, 1 )[0];
+
+	/* Initialise timers */
+	via->t1.name = "1";
+	via->t2.name = "2";
+	via->t1.ifr = M6522_INT_T1;
+	via->t2.ifr = M6522_INT_T2;
 
 	/* Register memory region */
 	memory_region_init_io ( &via->mr, &m6522_ops, via, via->name, size );

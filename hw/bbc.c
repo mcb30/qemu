@@ -520,6 +520,9 @@ static BBCKey bbc_keys[] = {
 #define BBC_KEY_SCANCODE( prefix, scancode ) \
 	( ( (prefix) << 8 ) | ( (scancode) & 0x7f ) )
 
+/** Keys in rows 1-7 can interrupt */
+#define BBC_KEY_CAN_INTERRUPT( row ) ( (row) != 0 )
+
 /**
  * Handle keyboard event
  *
@@ -529,11 +532,9 @@ static BBCKey bbc_keys[] = {
 static void bbc_kbd_event ( void *opaque, int keycode ) {
 	BBCSystemVIA *via = opaque;
 	BBCKey *key = NULL;
-	int pressed;
+	bool pressed;
 	uint16_t scancode;
 	unsigned int i;
-
-	printf ( "keycode %02x\n", keycode );
 
 	/* Handle extended keypresses */
 	if ( BBC_KEY_IS_PREFIX ( keycode ) ) {
@@ -563,8 +564,21 @@ static void bbc_kbd_event ( void *opaque, int keycode ) {
 		return;
 	}
 
-	printf ( "key %s %s\n", key->name,
-		 ( pressed ? "pressed" : "released" ) );
+	/* Ignore duplicate press/release events */
+	if ( pressed == via->key_pressed[key->column][key->row] )
+		return;
+
+	/* Record key as pressed/released */
+	via->key_pressed[key->column][key->row] = pressed;
+	qemu_log_mask ( CPU_LOG_IOPORT, "%s: key %s %s\n", via->name,
+			key->name, ( pressed ? "pressed" : "released" ) );
+
+	/* Update number of interrupting keys and update interrupt request */
+	if ( BBC_KEY_CAN_INTERRUPT ( key->row ) ) {
+		via->interrupting_keys += ( pressed ? 1 : -1 );
+		//		qemu_set_irq ( via->via->a.c2_irq,
+		//			       ( via->interrupting_keys > 0 ) );
+	}
 
 	// break key is a hardwired reset on BBC!
 }
