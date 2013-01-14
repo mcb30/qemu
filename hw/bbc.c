@@ -407,9 +407,6 @@ static void bbc_paged_rom_select_init ( MemoryRegion *parent, hwaddr offset,
  *
  */
 
-/** Startup DIP switches */
-static const uint8_t bbc_startup = 0x07;
-
 /**
  * Check if CAPS LOCK is enabled
  *
@@ -469,6 +466,14 @@ static inline unsigned int bbc_keyboard_column ( BBCSystemVIA *via ) {
 	/* Column address is in PA3:0 */
 	return ( ( via->slow_data >> 0 ) & 0x0f );
 }
+
+/** Keyboard DIP switches SW1-SW8 are mapped into row 0 */
+#define BBC_KB_SW_ROW 0
+
+/** Keyboard DIP switch SW<n> (i.e. bit 8-<n>) is mapped to row 0
+ * column <n>+1
+ */
+#define BBC_KB_SW_COLUMN(bit) ( 8 - (bit) + 1 )
 
 /** A BBC key */
 typedef struct {
@@ -694,16 +699,14 @@ static void bbc_keyboard_event ( void *opaque, int keycode ) {
  * @ret pressed		Key is pressed
  */
 static int bbc_keyboard_pressed ( BBCSystemVIA *via ) {
-	unsigned int row = bbc_keyboard_row ( via );
-	unsigned int column = bbc_keyboard_column ( via );
+	unsigned int row;
+	unsigned int column;
 	int pressed;
 
-	/* Startup DIP switches are mapped to row 0 columns 2-9 */
-	if ( ( row == 0 ) && ( column >= 2 ) ) {
-		pressed = ( ( bbc_startup >> ( 9 - column ) ) & 0x01 );
-	} else {
-		pressed = ( via->keys_pressed[column] & ( 1 << row ) );
-	}
+	/* Check pressed-key bitmap */
+	row = bbc_keyboard_row ( via );
+	column = bbc_keyboard_column ( via );
+	pressed = ( via->keys_pressed[column] & ( 1 << row ) );
 
 	qemu_log_mask ( CPU_LOG_IOPORT, "BBC: keyboard column %d row %d %s\n",
 			column, row, ( pressed ? "pressed" : "not pressed" ) );
@@ -727,6 +730,28 @@ static void bbc_keyboard_leds ( BBCSystemVIA *via ) {
 	qemu_log_mask ( CPU_LOG_IOPORT, "BBC: keyboard leds %s %s\n",
 			( caps_lock ? "CAPSLOCK" : "capslock" ),
 			( shift_lock ? "SHIFTLOCK" : "shiftlock" ) );
+}
+
+/**
+ * Set state of keyboard DIP switches
+ *
+ * @v via		System VIA
+ * @v dip		DIP switch settings
+ */
+static void bbc_keyboard_dip ( BBCSystemVIA *via, uint8_t dip ) {
+	unsigned int i;
+	unsigned int row;
+	unsigned int column;
+
+	/* DIP switches are mapped to row 0 columns 2-9.  Mark these
+	 * non-interrupting "keys" as being permanently pressed.
+	 */
+	for ( i = 0 ; i < 8 ; i++ ) {
+		row = BBC_KB_SW_ROW;
+		column = BBC_KB_SW_COLUMN ( i );
+		if ( dip & ( 1 << i ) )
+			via->keys_pressed[column] |= ( 1 << row );
+	}
 }
 
 /******************************************************************************
@@ -865,11 +890,12 @@ static const VMStateDescription vmstate_bbc_system_via = {
  * @v size		Size of memory region
  * @v name		Device name
  * @v irq		Interrupt request line
+ * @v dip		DIP switch settings
  * @ret via		System VIA
  */
 static BBCSystemVIA * bbc_system_via_init ( MemoryRegion *parent, hwaddr offset,
 					    uint64_t size, const char *name,
-					    qemu_irq irq ) {
+					    qemu_irq irq, uint8_t dip ) {
 	BBCSystemVIA *via = g_new0 ( BBCSystemVIA, 1 );
 
 	/* Initialise system VIA */
@@ -878,6 +904,7 @@ static BBCSystemVIA * bbc_system_via_init ( MemoryRegion *parent, hwaddr offset,
 				&bbc_system_via_ops, irq, BBC_1MHZ_TICK_NS );
 
 	/* Initialise keyboard */
+	bbc_keyboard_dip ( via, dip );
 	qemu_add_kbd_event_handler ( bbc_keyboard_event, via );
 
 	/* Register virtual machine state */
@@ -1047,12 +1074,13 @@ static BBCJIM * bbc_jim_init ( MemoryRegion *parent, hwaddr offset,
  * @v name		Device name
  * @v paged		Paged ROM
  * @v system_via_irq	System VIA interrupt request line
+ * @v dip		DIP switch settings
  * @v user_via_irq	User VIA interrupt request line
  * @ret sheila		SHEILA
  */
 static BBCSHEILA * bbc_sheila_init ( MemoryRegion *parent, hwaddr offset,
 				     const char *name, BBCPagedROM *paged,
-				     qemu_irq system_via_irq,
+				     qemu_irq system_via_irq, uint8_t dip,
 				     qemu_irq user_via_irq ) {
 	BBCSHEILA *sheila = g_new0 ( BBCSHEILA, 1 );
 
@@ -1093,7 +1121,7 @@ static BBCSHEILA * bbc_sheila_init ( MemoryRegion *parent, hwaddr offset,
 	sheila->system_via =
 		bbc_system_via_init ( &sheila->mr, BBC_SHEILA_SYSTEM_VIA_BASE,
 				      BBC_SHEILA_SYSTEM_VIA_SIZE,
-				      "system_via", system_via_irq );
+				      "system_via", system_via_irq, dip );
 	sheila->user_via =
 		bbc_user_via_init ( &sheila->mr, BBC_SHEILA_USER_VIA_BASE,
 				    BBC_SHEILA_USER_VIA_SIZE,
@@ -1295,6 +1323,9 @@ static void bbc_load_paged_roms ( BBCPagedROM *paged,
  *
  */
 
+/** Startup DIP switches */
+static const uint8_t bbc_dip = 0x07;
+
 /** BBC Micro state description */
 static const VMStateDescription vmstate_bbc = {
 	.name = "bbc",
@@ -1349,7 +1380,7 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 	bbc->jim = bbc_jim_init ( address_space_mem, BBC_JIM_BASE, "jim" );
 	bbc->sheila = bbc_sheila_init ( address_space_mem, BBC_SHEILA_BASE,
 					"sheila", bbc->paged,
-					bbc->irq[BBC_IRQ_SYSTEM_VIA],
+					bbc->irq[BBC_IRQ_SYSTEM_VIA], bbc_dip,
 					bbc->irq[BBC_IRQ_USER_VIA] );
 
 	/* Initialise display */
