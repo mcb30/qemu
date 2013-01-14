@@ -1245,6 +1245,10 @@ static BBCSHEILA * bbc_sheila_init ( MemoryRegion *parent, hwaddr offset,
 				    BBC_SHEILA_USER_VIA_SIZE,
 				    "user_via", user_via_irq );
 
+	/* Initialise floppy disc controller */
+	sheila->fdc = wd1770_init ( &sheila->mr, BBC_SHEILA_FDC_BASE,
+				    BBC_SHEILA_FDC_SIZE, "fdc" );
+
 	/* Initialise analogue to digital converter */
 	sheila->adc = bbc_adc_init ( &sheila->mr, BBC_SHEILA_ADC_BASE,
 				     BBC_SHEILA_ADC_SIZE, "adc" );

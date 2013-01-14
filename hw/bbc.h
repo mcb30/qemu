@@ -23,6 +23,7 @@
 #include "mc6845.h"
 #include "mc6850.h"
 #include "m6522.h"
+#include "wd1770.h"
 
 #define BBC_B_RAM_BASE 0x0000
 #define BBC_B_RAM_SIZE 0x8000
@@ -61,6 +62,8 @@
 #define BBC_SHEILA_SYSTEM_VIA_SIZE 0x10
 #define BBC_SHEILA_USER_VIA_BASE 0x60
 #define BBC_SHEILA_USER_VIA_SIZE 0x10
+#define BBC_SHEILA_FDC_BASE 0x80
+#define BBC_SHEILA_FDC_SIZE 0x20
 #define BBC_SHEILA_ADC_BASE 0xc0
 #define BBC_SHEILA_ADC_SIZE 0x20
 
@@ -255,6 +258,8 @@ typedef struct {
 	BBCSystemVIA *system_via;
 	/** User VIA */
 	BBCUserVIA *user_via;
+	/** Floppy disc controller */
+	WD1770FDC *fdc;
 	/** Analogue to digital converter */
 	BBCADC *adc;
 } BBCSHEILA;
