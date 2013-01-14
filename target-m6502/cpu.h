@@ -30,6 +30,10 @@
 
 #define TARGET_HAS_ICE 1
 
+/* The 6502 allows for arbitrary self-modifying code */
+#define TARGET_HAS_SMC
+#define TARGET_HAS_PRECISE_SMC
+
 #define NB_MMU_MODES 1
 #define TARGET_PAGE_BITS 8
 

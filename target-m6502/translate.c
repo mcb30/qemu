@@ -79,7 +79,7 @@ struct DisasContext {
 
 	int is_jmp;
 	unsigned int num_insns;
-	unsigned int offset;
+	int offset;
 };
 
 /**
@@ -1491,7 +1491,7 @@ static int m6502_check_breakpoints ( DisasContext *dc ) {
  * @v dc		Disassembly context
  */
 static void m6502_opcode_metadata ( DisasContext *dc ) {
-	unsigned int offset;
+	int offset;
 
 	/* Clear the "start of instruction" flag for all opcodes since the
 	 * start of the preceding instruction.
