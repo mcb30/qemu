@@ -22,6 +22,73 @@
 #include "exec/address-spaces.h"
 #include "wd1770.h"
 
+#define DEBUG_WD1770 1
+
+/* Debug messages */
+#define LOG_WD1770(...) do {						\
+		if ( DEBUG_WD1770 ) {					\
+			qemu_log_mask ( CPU_LOG_IOPORT, __VA_ARGS__ );	\
+		}							\
+	} while ( 0 )
+
+/**
+ * Read from 1770 FDC track register
+ *
+ * @v fdc		1770 FDC
+ * @ret data		Data
+ */
+static uint8_t wd1770_track_read ( WD1770FDC *fdc ) {
+	uint8_t data;
+
+	/* Read track register */
+	data = fdc->track;
+
+	return data;
+}
+
+/**
+ * Write to 1770 FDC track register
+ *
+ * @v fdc		1770 FDC
+ * @v data		Data
+ */
+static void wd1770_track_write ( WD1770FDC *fdc, uint8_t data ) {
+
+	LOG_WD1770 ( "%s: TRACK=0x%02x\n", fdc->name, data );
+
+	/* Write track register */
+	fdc->track = data;
+}
+
+/**
+ * Read from 1770 FDC sector register
+ *
+ * @v fdc		1770 FDC
+ * @ret data		Data
+ */
+static uint8_t wd1770_sector_read ( WD1770FDC *fdc ) {
+	uint8_t data;
+
+	/* Read sector register */
+	data = fdc->sector;
+
+	return data;
+}
+
+/**
+ * Write to 1770 FDC sector register
+ *
+ * @v fdc		1770 FDC
+ * @v data		Data
+ */
+static void wd1770_sector_write ( WD1770FDC *fdc, uint8_t data ) {
+
+	LOG_WD1770 ( "%s: SECTOR=0x%02x\n", fdc->name, data );
+
+	/* Write sector register */
+	fdc->sector = data;
+}
+
 /**
  * Read from 1770 FDC
  *
@@ -36,10 +103,16 @@ static uint64_t wd1770_read ( void *opaque, hwaddr addr, unsigned int size ) {
 
 	/* Read from specified register */
 	switch ( addr & ( WD1770_SIZE - 1 ) ) {
+	case WD1770_TRACK:
+		data = wd1770_track_read ( fdc );
+		break;
+	case WD1770_SECTOR:
+		data = wd1770_sector_read ( fdc );
+		break;
 	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from "
 				"0x%02lx\n", fdc->name, addr );
-		data = 0;
+		data = 0xff;
 		break;
 	}
 	return data;
@@ -60,6 +133,12 @@ static void wd1770_write ( void *opaque, hwaddr addr, uint64_t data64,
 
 	/* Write to specified register */
 	switch ( addr & ( WD1770_SIZE - 1 ) ) {
+	case WD1770_TRACK:
+		wd1770_track_write ( fdc, data );
+		break;
+	case WD1770_SECTOR:
+		wd1770_sector_write ( fdc, data );
+		break;
 	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to "
 				"0x%02lx\n", fdc->name, data, addr );
@@ -79,6 +158,9 @@ static const VMStateDescription vmstate_wd1770 = {
 	.version_id = 1,
 	.minimum_version_id = 1,
 	.fields = ( VMStateField[] ) {
+		VMSTATE_UINT8 ( phys_track, WD1770FDC ),
+		VMSTATE_UINT8 ( track, WD1770FDC ),
+		VMSTATE_UINT8 ( sector, WD1770FDC ),
 		VMSTATE_END_OF_LIST()
 	},
 };
@@ -90,14 +172,18 @@ static const VMStateDescription vmstate_wd1770 = {
  * @v offset		Offset within parent memory region
  * @v size		Size of memory region
  * @v name		Device name
+ * @v drq		Data request interrupt request line
+ * @v intrq		Completion interrupt request line
  * @ret fdc		1770 FDC
  */
 WD1770FDC * wd1770_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
-			  const char *name ) {
+			  const char *name, qemu_irq drq, qemu_irq intrq ) {
 	WD1770FDC *fdc = g_new0 ( WD1770FDC, 1 );
 
 	/* Initialise FDC */
 	fdc->name = name;
+	fdc->drq = drq;
+	fdc->intrq = intrq;
 
 	/* Register memory region */
 	memory_region_init_io ( &fdc->mr, &wd1770_ops, fdc, fdc->name, size );

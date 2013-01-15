@@ -82,6 +82,12 @@
 #define BBC_LATCH_CAPS_LOCK 6
 #define BBC_LATCH_SHIFT_LOCK 7
 
+/* Floppy disc controller */
+#define BBC_1770_FDC_CONTROL_BASE 0x04
+#define BBC_1770_FDC_CONTROL_SIZE 0x04
+#define BBC_1770_FDC_BASE 0x04
+#define BBC_1770_FDC_SIZE 0x04
+
 /* Analogue to digital converter */
 #define BBC_ADC_SIZE 0x04
 #define BBC_ADC_START 0x00
@@ -91,6 +97,12 @@
 
 /* Analogue to digital converter status register */
 #define BBC_ADC_NOT_COMPLETE 0x80
+
+/** Number of columns in keyboard grid */
+#define BBC_KEYBOARD_COLUMNS 16
+
+/** Rows capable of generating a keyboard interrupt */
+#define BBC_KEYBOARD_IRQ_ROW_MASK 0xfe
 
 /** System clock runs at 1MHz */
 #define BBC_1MHZ_TICK_NS 1000
@@ -158,12 +170,6 @@ typedef struct {
 	uint8_t page;
 } BBCPagedROM;
 
-/** Number of columns in keyboard grid */
-#define BBC_KEYBOARD_COLUMNS 16
-
-/** Rows capable of generating a keyboard interrupt */
-#define BBC_KEYBOARD_IRQ_ROW_MASK 0xfe
-
 /**
  * System VIA
  */
@@ -197,6 +203,21 @@ typedef struct {
 	/** 6522 VIA */
 	M6522VIA *via;
 } BBCUserVIA;
+
+/**
+ * BBC 1770 floppy disc controller
+ */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Memory region */
+	MemoryRegion mr;
+	/** WD1770 FDC */
+	WD1770FDC *fdc;
+
+	/** Control register */
+	uint8_t control;
+} BBC1770FDC;
 
 /**
  * Analogue to digital converter
@@ -259,7 +280,7 @@ typedef struct {
 	/** User VIA */
 	BBCUserVIA *user_via;
 	/** Floppy disc controller */
-	WD1770FDC *fdc;
+	BBC1770FDC *fdc;
 	/** Analogue to digital converter */
 	BBCADC *adc;
 } BBCSHEILA;
@@ -285,6 +306,8 @@ enum bbc_irq_sources {
 
 /** NMI interrupt sources */
 enum bbc_nmi_sources {
+	BBC_NMI_FDC_DRQ,
+	BBC_NMI_FDC_INTRQ,
 	BBC_NMI_COUNT
 };
 

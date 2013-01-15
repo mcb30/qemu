@@ -26,12 +26,31 @@ typedef struct {
 	const char *name;
 	/** Memory region */
 	MemoryRegion mr;
+	/* Data request interrupt request line */
+	qemu_irq drq;
+	/* Completion interrupt request line */
+	qemu_irq intrq;
+
+	/** Current track position */
+	uint8_t phys_track;
+	/** Track register */
+	uint8_t track;
+	/** Sector register */
+	uint8_t sector;
 } WD1770FDC;
 
 /** Size of memory region */
 #define WD1770_SIZE 0x04
 
+/* Register addresses */
+#define WD1770_COMMAND 0x00
+#define WD1770_STATUS 0x00
+#define WD1770_TRACK 0x01
+#define WD1770_SECTOR 0x02
+#define WD1770_DATA 0x03
+
 extern WD1770FDC * wd1770_init ( MemoryRegion *parent, hwaddr offset,
-				 uint64_t size, const char *name );
+				 uint64_t size, const char *name,
+				 qemu_irq drq, qemu_irq intrq );
 
 #endif

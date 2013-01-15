@@ -979,6 +979,107 @@ static BBCUserVIA * bbc_user_via_init ( MemoryRegion *parent, hwaddr offset,
 
 /******************************************************************************
  *
+ * 1770 floppy disc controller (SHEILA &80-&9F)
+ *
+ */
+
+/**
+ * Read from 1770 FDC control register
+ *
+ * @v opaque		1770 FDC
+ * @v addr		Register address
+ * @v size		Size of read
+ * @ret data		Read data
+ */
+static uint64_t bbc_1770_fdc_read ( void *opaque, hwaddr addr,
+				    unsigned int size ) {
+
+	/* This is a write-only register */
+	return 0xff;
+}
+
+/**
+ * Write to 1770 FDC control register
+ *
+ * @v opaque		1770 FDC
+ * @v addr		Register address
+ * @v data64		Data to write
+ * @v size		Size of write
+ */
+static void bbc_1770_fdc_write ( void *opaque, hwaddr addr, uint64_t data64,
+				 unsigned int size ) {
+	BBC1770FDC *fdc = opaque;
+	uint8_t data = data64;
+
+	/* Write to specified register */
+	switch ( addr & ( BBC_1770_FDC_SIZE - 1 ) ) {
+	default:
+		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to "
+				"0x%02lx\n", fdc->name, data, addr );
+		break;
+	}
+}
+
+/** 1770 FDC operations */
+static const MemoryRegionOps bbc_1770_fdc_ops = {
+	.read = bbc_1770_fdc_read,
+	.write = bbc_1770_fdc_write,
+};
+
+/** 1770 FDC state description */
+static const VMStateDescription vmstate_bbc_1770_fdc = {
+	.name = "bbc_1770_fdc",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_UINT8 ( control, BBC1770FDC ),
+		VMSTATE_END_OF_LIST()
+	},
+};
+
+/**
+ * Initialise 1770 FDC
+ *
+ * @v parent		Parent memory region
+ * @v offset		Offset within parent memory region
+ * @v size		Size of memory region
+ * @v name		Device name
+ * @v drq		Data request non-maskable interrupt request line
+ * @v intrq		Completion non-maskable interrupt request line
+ * @ret fdc		1770 FDC
+ */
+static BBC1770FDC * bbc_1770_fdc_init ( MemoryRegion *parent, hwaddr offset,
+					uint64_t size, const char *name,
+					qemu_irq drq, qemu_irq intrq ) {
+	BBC1770FDC *fdc = g_new0 ( BBC1770FDC, 1 );
+	const char *bbc_1770_fdc_name = g_strdup_printf ( "%s.ctrl", name );
+
+	/* The memory map for this peripheral is a little strange.
+	 * The BBC was originally designed to take an Intel 8271 FDC,
+	 * occupying eight bytes of address space.  The WD1770 FDC was
+	 * mapped in to the latter four byte of this address space,
+	 * with the first four bytes being occupied by a 74LS174 hex
+	 * D-type which provides additional signals to the WD1770.
+	 */
+
+	/* Initialise 1770 FDC */
+	fdc->name = bbc_1770_fdc_name;
+	fdc->fdc = wd1770_init ( parent, ( offset + BBC_1770_FDC_BASE ),
+				 BBC_1770_FDC_SIZE, name, drq, intrq );
+
+	/* Register memory region */
+	memory_region_init_io ( &fdc->mr, &bbc_1770_fdc_ops, fdc, fdc->name,
+				BBC_1770_FDC_SIZE );
+	memory_region_add_subregion ( parent, offset, &fdc->mr );
+
+	/* Register virtual machine state */
+	vmstate_register ( NULL, offset, &vmstate_bbc_1770_fdc, fdc );
+
+	return fdc;
+}
+
+/******************************************************************************
+ *
  * Analogue to digital converter (UPD7002)
  *
  */
@@ -1194,12 +1295,16 @@ static BBCJIM * bbc_jim_init ( MemoryRegion *parent, hwaddr offset,
  * @v system_via_irq	System VIA interrupt request line
  * @v dip		DIP switch settings
  * @v user_via_irq	User VIA interrupt request line
+ * @v fdc_drq_nmi	FDC data request non-maskable interrupt request line
+ * @v fdc_intrq_nmi	FDC completion non-maskable interrupt request line
  * @ret sheila		SHEILA
  */
 static BBCSHEILA * bbc_sheila_init ( MemoryRegion *parent, hwaddr offset,
 				     const char *name, BBCPagedROM *paged,
 				     qemu_irq system_via_irq, uint8_t dip,
-				     qemu_irq user_via_irq ) {
+				     qemu_irq user_via_irq,
+				     qemu_irq fdc_drq_nmi,
+				     qemu_irq fdc_intrq_nmi ) {
 	BBCSHEILA *sheila = g_new0 ( BBCSHEILA, 1 );
 
 	/* Initialise SHEILA */
@@ -1246,8 +1351,9 @@ static BBCSHEILA * bbc_sheila_init ( MemoryRegion *parent, hwaddr offset,
 				    "user_via", user_via_irq );
 
 	/* Initialise floppy disc controller */
-	sheila->fdc = wd1770_init ( &sheila->mr, BBC_SHEILA_FDC_BASE,
-				    BBC_SHEILA_FDC_SIZE, "fdc" );
+	sheila->fdc = bbc_1770_fdc_init ( &sheila->mr, BBC_SHEILA_FDC_BASE,
+					  BBC_SHEILA_FDC_SIZE, "fdc",
+					  fdc_drq_nmi, fdc_intrq_nmi );
 
 	/* Initialise analogue to digital converter */
 	sheila->adc = bbc_adc_init ( &sheila->mr, BBC_SHEILA_ADC_BASE,
@@ -1507,7 +1613,9 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 	bbc->sheila = bbc_sheila_init ( address_space_mem, BBC_SHEILA_BASE,
 					"sheila", bbc->paged,
 					bbc->irq[BBC_IRQ_SYSTEM_VIA], bbc_dip,
-					bbc->irq[BBC_IRQ_USER_VIA] );
+					bbc->irq[BBC_IRQ_USER_VIA],
+					bbc->nmi[BBC_NMI_FDC_DRQ],
+					bbc->nmi[BBC_NMI_FDC_INTRQ] );
 
 	/* Initialise display */
 	bbc->crt = bbc_crt_init ( "crt", &bbc->ram, bbc->sheila->crtc,
