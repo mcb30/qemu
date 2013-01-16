@@ -156,6 +156,6 @@ extern void mc6845_update_unregister ( MC6845CRTC *crtc,
 				       MC6845CRTCUpdated updated,
 				       void *opaque );
 extern MC6845CRTC * mc6845_init ( MemoryRegion *parent, hwaddr offset,
-				  uint64_t size, const char *name );
+				  const char *name );
 
 #endif

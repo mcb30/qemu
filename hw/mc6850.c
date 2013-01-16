@@ -102,7 +102,7 @@ static uint64_t mc6850_read ( void *opaque, hwaddr addr, unsigned int size ) {
 	uint8_t data;
 
 	/* Read from specified register */
-	switch ( addr & ( MC6850_SIZE - 1 ) ) {
+	switch ( addr ) {
 	case MC6850_STATUS:
 		data = mc6850_status_read ( acia );
 		break;
@@ -132,7 +132,7 @@ static void mc6850_write ( void *opaque, hwaddr addr, uint64_t data64,
 	uint8_t data = data64;
 
 	/* Write to specified register */
-	switch ( addr & ( MC6850_SIZE - 1 ) ) {
+	switch ( addr ) {
 	case MC6850_CONTROL:
 		mc6850_control_write ( acia, data );
 		break;
@@ -167,12 +167,11 @@ static const VMStateDescription vmstate_mc6850 = {
  *
  * @v parent		Parent memory region
  * @v offset		Offset within parent memory region
- * @v size		Size of memory region
  * @v name		Device name
  * @v chr		Character device
  * @ret acia		6850 ACIA
  */
-MC6850ACIA * mc6850_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
+MC6850ACIA * mc6850_init ( MemoryRegion *parent, hwaddr offset,
 			   const char *name, CharDriverState *chr ) {
 	MC6850ACIA *acia = g_new0 ( MC6850ACIA, 1 );
 
@@ -182,7 +181,7 @@ MC6850ACIA * mc6850_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
 
 	/* Register memory region */
 	memory_region_init_io ( &acia->mr, &mc6850_ops, acia, acia->name,
-				size );
+				MC6850_SIZE );
 	memory_region_add_subregion ( parent, offset, &acia->mr );
 
 	/* Register virtual machine state */

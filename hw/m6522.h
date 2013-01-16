@@ -186,7 +186,7 @@ struct M6522VIA {
 #define M6522_ACR_T1_CONTINUOUS 0x40
 
 extern M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset,
-			       uint64_t size, const char *name, void *opaque,
+			       const char *name, void *opaque,
 			       const M6522VIAOps *ops, qemu_irq irq,
 			       unsigned long tick_ns );
 

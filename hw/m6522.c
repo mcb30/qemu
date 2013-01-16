@@ -636,7 +636,7 @@ static uint64_t m6522_read ( void *opaque, hwaddr addr, unsigned int size ) {
 	uint8_t data;
 
 	/* Read from specified register */
-	switch ( addr & ( M6522_SIZE - 1 ) ) {
+	switch ( addr ) {
 	case M6522_IRB:
 		data = m6522_ir_read ( via, &via->b, 1 );
 		break;
@@ -709,7 +709,7 @@ static void m6522_write ( void *opaque, hwaddr addr, uint64_t data64,
 	uint8_t data = data64;
 
 	/* Write to specified register */
-	switch ( addr & ( M6522_SIZE - 1 ) ) {
+	switch ( addr ) {
 	case M6522_ORB:
 		m6522_or_write ( via, &via->b, data, 1 );
 		break;
@@ -799,7 +799,6 @@ static const VMStateDescription vmstate_m6522 = {
  *
  * @v parent		Parent memory region
  * @v offset		Offset within parent memory region
- * @v size		Size of memory region
  * @v name		Device name
  * @v opaque		Opaque pointer
  * @v ops		VIA operations
@@ -807,7 +806,7 @@ static const VMStateDescription vmstate_m6522 = {
  * @v tick_ns		Clock tick duration (in nanoseconds)
  * @ret via		6522 VIA
  */
-M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
+M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset,
 			const char *name, void *opaque, const M6522VIAOps *ops,
 			qemu_irq irq, unsigned long tick_ns ) {
 	M6522VIA *via = g_new0 ( M6522VIA, 1 );
@@ -849,7 +848,8 @@ M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
 					    &via->t2 );
 
 	/* Register memory region */
-	memory_region_init_io ( &via->mr, &m6522_ops, via, via->name, size );
+	memory_region_init_io ( &via->mr, &m6522_ops, via, via->name,
+				M6522_SIZE );
 	memory_region_add_subregion ( parent, offset, &via->mr );
 
 	/* Register virtual machine state */

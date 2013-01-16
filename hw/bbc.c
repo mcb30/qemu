@@ -460,7 +460,7 @@ static void bbc_video_ula_write ( void *opaque, hwaddr addr,
 	uint8_t data = data64;
 
 	/* Write to specified register */
-	switch ( addr & ( BBC_VIDEO_ULA_SIZE - 1 ) ) {
+	switch ( addr ) {
 	case BBC_VIDEO_ULA_CONTROL:
 		bbc_video_ula_control_write ( ula, data );
 		break;
@@ -500,14 +500,12 @@ static const VMStateDescription vmstate_bbc_video_ula = {
 /**
  * Initialise video ULA
  *
- * @v parent		Parent memory region
- * @v offset		Offset within parent memory region
- * @v size		Size of memory region
+ * @v addr		Address
  * @v name		Device name
  * @ret ula		Video ULA
  */
-static BBCVideoULA * bbc_video_ula_init ( MemoryRegion *parent, hwaddr offset,
-					  uint64_t size, const char *name ) {
+static BBCVideoULA * bbc_video_ula_init ( hwaddr addr, const char *name ) {
+	MemoryRegion *address_space_mem = get_system_memory();
 	BBCVideoULA *ula = g_new0 ( BBCVideoULA, 1 );
 
 	/* Initialise ULA */
@@ -515,11 +513,12 @@ static BBCVideoULA * bbc_video_ula_init ( MemoryRegion *parent, hwaddr offset,
 	QTAILQ_INIT ( &ula->updates );
 
 	/* Register memory region */
-	memory_region_init_io ( &ula->mr, &bbc_video_ula_ops, ula, name, size );
-	memory_region_add_subregion ( parent, offset, &ula->mr );
+	memory_region_init_io ( &ula->mr, &bbc_video_ula_ops, ula, name,
+				BBC_VIDEO_ULA_SIZE );
+	memory_region_add_subregion ( address_space_mem, addr, &ula->mr );
 
 	/* Register virtual machine state */
-	vmstate_register ( NULL, offset, &vmstate_bbc_video_ula, ula );
+	vmstate_register ( NULL, addr, &vmstate_bbc_video_ula, ula );
 
 	return ula;
 }
@@ -1008,22 +1007,20 @@ static const VMStateDescription vmstate_bbc_system_via = {
 /**
  * Initialise system VIA
  *
- * @v parent		Parent memory region
- * @v offset		Offset within parent memory region
- * @v size		Size of memory region
+ * @v addr		Address
  * @v name		Device name
  * @v irq		Interrupt request line
  * @v dip		DIP switch settings
  * @ret via		System VIA
  */
-static BBCSystemVIA * bbc_system_via_init ( MemoryRegion *parent, hwaddr offset,
-					    uint64_t size, const char *name,
+static BBCSystemVIA * bbc_system_via_init ( hwaddr addr, const char *name,
 					    qemu_irq irq, uint8_t dip ) {
+	MemoryRegion *address_space_mem = get_system_memory();
 	BBCSystemVIA *via = g_new0 ( BBCSystemVIA, 1 );
 
 	/* Initialise system VIA */
 	via->name = name;
-	via->via = m6522_init ( parent, offset, size, name, via,
+	via->via = m6522_init ( address_space_mem, addr, name, via,
 				&bbc_system_via_ops, irq, BBC_1MHZ_TICK_NS );
 
 	/* Initialise keyboard */
@@ -1031,7 +1028,7 @@ static BBCSystemVIA * bbc_system_via_init ( MemoryRegion *parent, hwaddr offset,
 	qemu_add_kbd_event_handler ( bbc_keyboard_event, via );
 
 	/* Register virtual machine state */
-	vmstate_register ( NULL, offset, &vmstate_bbc_system_via, via );
+	vmstate_register ( NULL, addr, &vmstate_bbc_system_via, via );
 
 	return via;
 }
@@ -1075,25 +1072,23 @@ static const VMStateDescription vmstate_bbc_user_via = {
 /**
  * Initialise user VIA
  *
- * @v parent		Parent memory region
- * @v offset		Offset within parent memory region
- * @v size		Size of memory region
+ * @v addr		Address
  * @v name		Device name
  * @v irq		Interrupt request line
  * @ret via		User VIA
  */
-static BBCUserVIA * bbc_user_via_init ( MemoryRegion *parent, hwaddr offset,
-					uint64_t size, const char *name,
+static BBCUserVIA * bbc_user_via_init ( hwaddr addr, const char *name,
 					qemu_irq irq ) {
+	MemoryRegion *address_space_mem = get_system_memory();
 	BBCUserVIA *via = g_new0 ( BBCUserVIA, 1 );
 
 	/* Initialise user VIA */
 	via->name = name;
-	via->via = m6522_init ( parent, offset, size, name, via,
+	via->via = m6522_init ( address_space_mem, addr, name, via,
 				&bbc_user_via_ops, irq, BBC_1MHZ_TICK_NS );
 
 	/* Register virtual machine state */
-	vmstate_register ( NULL, offset, &vmstate_bbc_user_via, via );
+	vmstate_register ( NULL, addr, &vmstate_bbc_user_via, via );
 
 	return via;
 }
@@ -1197,19 +1192,16 @@ static const VMStateDescription vmstate_bbc_1770_fdc = {
 /**
  * Initialise 1770 FDC
  *
- * @v parent		Parent memory region
- * @v offset		Offset within parent memory region
- * @v size		Size of memory region
+ * @v addr		Address
  * @v name		Device name
  * @v drq		Data request non-maskable interrupt request line
  * @v intrq		Completion non-maskable interrupt request line
  * @ret fdc		1770 FDC
  */
-static BBC1770FDC * bbc_1770_fdc_init ( MemoryRegion *parent, hwaddr offset,
-					uint64_t size, const char *name,
+static BBC1770FDC * bbc_1770_fdc_init ( hwaddr addr, const char *name,
 					qemu_irq drq, qemu_irq intrq ) {
+	MemoryRegion *address_space_mem = get_system_memory();
 	BBC1770FDC *fdc = g_new0 ( BBC1770FDC, 1 );
-	const char *bbc_1770_fdc_name = g_strdup_printf ( "%s.ctrl", name );
 	DriveInfo *fds[WD1770_DRIVE_COUNT];
 	unsigned int i;
 
@@ -1222,20 +1214,19 @@ static BBC1770FDC * bbc_1770_fdc_init ( MemoryRegion *parent, hwaddr offset,
 	 */
 
 	/* Initialise 1770 FDC */
-	fdc->name = bbc_1770_fdc_name;
+	fdc->name = name;
 	for ( i = 0 ; i < ARRAY_SIZE ( fds ) ; i++ )
 		fds[i] = drive_get ( IF_FLOPPY, 0, i );
-	//
-	fdc->fdc = wd1770_init ( ( offset + BBC_1770_FDC_BASE ),
+	fdc->fdc = wd1770_init ( ( addr + BBC_1770_FDC_BASE ),
 				 drq, intrq, fds );
 
 	/* Register memory region */
 	memory_region_init_io ( &fdc->mr, &bbc_1770_fdc_ops, fdc, fdc->name,
 				BBC_1770_FDC_SIZE );
-	memory_region_add_subregion ( parent, offset, &fdc->mr );
+	memory_region_add_subregion ( address_space_mem, addr, &fdc->mr );
 
 	/* Register virtual machine state */
-	vmstate_register ( NULL, offset, &vmstate_bbc_1770_fdc, fdc );
+	vmstate_register ( NULL, addr, &vmstate_bbc_1770_fdc, fdc );
 
 	return fdc;
 }
@@ -1278,7 +1269,7 @@ static uint64_t bbc_adc_read ( void *opaque, hwaddr addr, unsigned int size ) {
 	uint8_t data;
 
 	/* Read from specified register */
-	switch ( addr & ( BBC_ADC_SIZE - 1 ) ) {
+	switch ( addr ) {
 	case BBC_ADC_STATUS:
 		data = bbc_adc_status_read ( adc );
 		break;
@@ -1306,7 +1297,7 @@ static void bbc_adc_write ( void *opaque, hwaddr addr,
 	uint8_t data = data64;
 
 	/* Write to specified register */
-	switch ( addr & ( BBC_ADC_SIZE - 1 ) ) {
+	switch ( addr ) {
 	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write &%02x to "
 				"&%02lx\n", adc->name, data, addr );
@@ -1333,25 +1324,24 @@ static const VMStateDescription vmstate_bbc_adc = {
 /**
  * Initialise analogue to digital converter
  *
- * @v parent		Parent memory region
- * @v offset		Offset within parent memory region
- * @v size		Size of memory region
+ * @v addr		Address
  * @v name		Device name
  * @ret adc		ADC
  */
-static BBCADC * bbc_adc_init ( MemoryRegion *parent, hwaddr offset,
-			       uint64_t size, const char *name ) {
+static BBCADC * bbc_adc_init ( hwaddr addr, const char *name ) {
+	MemoryRegion *address_space_mem = get_system_memory();
 	BBCADC *adc = g_new0 ( BBCADC, 1 );
 
 	/* Initialise ADC */
 	adc->name = name;
 
 	/* Register memory region */
-	memory_region_init_io ( &adc->mr, &bbc_adc_ops, adc, name, size );
-	memory_region_add_subregion ( parent, offset, &adc->mr );
+	memory_region_init_io ( &adc->mr, &bbc_adc_ops, adc, name,
+				BBC_ADC_SIZE );
+	memory_region_add_subregion ( address_space_mem, addr, &adc->mr );
 
 	/* Register virtual machine state */
-	vmstate_register ( NULL, offset, &vmstate_bbc_adc, adc );
+	vmstate_register ( NULL, addr, &vmstate_bbc_adc, adc );
 
 	return adc;
 }
@@ -1601,41 +1591,34 @@ static void bbc_io_init ( BBCMicro *bbc ) {
 
 	/* Initialise CRTC */
 	bbc->crtc = mc6845_init ( address_space_mem, BBC_SHEILA_CRTC_BASE,
-				  BBC_SHEILA_CRTC_SIZE, "crtc" );
+				  "crtc" );
 
 	/* Initialise serial system */
 	bbc->acia = mc6850_init ( address_space_mem, BBC_SHEILA_ACIA_BASE,
-				  BBC_SHEILA_ACIA_SIZE, "acia",
-				  serial_hds[0] );
+				  "acia", serial_hds[0] );
 
 	/* Initialise video ULA */
-	bbc->video_ula = bbc_video_ula_init ( address_space_mem,
-					      BBC_SHEILA_VIDEO_ULA_BASE,
-					      BBC_SHEILA_VIDEO_ULA_SIZE,
+	bbc->video_ula = bbc_video_ula_init ( BBC_SHEILA_VIDEO_ULA_BASE,
 					      "video_ula" );
 
-	/* Initialise system and user VIAs */
-	bbc->system_via = bbc_system_via_init ( address_space_mem,
-						BBC_SHEILA_SYSTEM_VIA_BASE,
-						BBC_SHEILA_SYSTEM_VIA_SIZE,
+	/* Initialise system VIA */
+	bbc->system_via = bbc_system_via_init ( BBC_SHEILA_SYSTEM_VIA_BASE,
 						"system_via",
 						bbc->irq[BBC_IRQ_SYSTEM_VIA],
 						bbc_dip );
-	bbc->user_via = bbc_user_via_init ( address_space_mem,
-					    BBC_SHEILA_USER_VIA_BASE,
-					    BBC_SHEILA_USER_VIA_SIZE,
+
+	/* Initialise user VIA */
+	bbc->user_via = bbc_user_via_init ( BBC_SHEILA_USER_VIA_BASE,
 					    "user_via",
 					    bbc->irq[BBC_IRQ_USER_VIA] );
 
 	/* Initialise floppy disc controller */
-	bbc->fdc = bbc_1770_fdc_init ( address_space_mem, BBC_SHEILA_FDC_BASE,
-				       BBC_SHEILA_FDC_SIZE, "fdc",
+	bbc->fdc = bbc_1770_fdc_init ( BBC_SHEILA_FDC_BASE, "fdc",
 				       bbc->nmi[BBC_NMI_FDC_DRQ],
 				       bbc->nmi[BBC_NMI_FDC_INTRQ] );
 
 	/* Initialise analogue to digital converter */
-	bbc->adc = bbc_adc_init ( address_space_mem, BBC_SHEILA_ADC_BASE,
-				  BBC_SHEILA_ADC_SIZE, "adc" );
+	bbc->adc = bbc_adc_init ( BBC_SHEILA_ADC_BASE, "adc" );
 }
 
 /**

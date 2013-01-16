@@ -94,7 +94,7 @@ static uint64_t mc6845_read ( void *opaque, hwaddr addr, unsigned int size ) {
 	uint8_t data;
 
 	/* Ignore reads from the write-only address register */
-	if ( ( addr & ( MC6845_SIZE - 1 ) ) == MC6845_ADDRESS )
+	if ( addr == MC6845_ADDRESS )
 		return 0;
 
 	/* Read from specified register.  Most registers are write-only */
@@ -134,7 +134,7 @@ static void mc6845_write ( void *opaque, hwaddr addr, uint64_t data64,
 	uint8_t data = data64;
 
 	/* Handle writes to address register */
-	if ( ( addr & ( MC6845_SIZE - 1 ) ) == MC6845_ADDRESS ) {
+	if ( addr == MC6845_ADDRESS ) {
 		crtc->address = ( data & MC6845_ADDRESS_MASK );
 		return;
 	}
@@ -279,11 +279,10 @@ static const VMStateDescription vmstate_mc6845 = {
  *
  * @v parent		Parent memory region
  * @v offset		Offset within parent memory region
- * @v size		Size of memory region
  * @v name		Device name
  * @ret crtc		6845 CRTC
  */
-MC6845CRTC * mc6845_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
+MC6845CRTC * mc6845_init ( MemoryRegion *parent, hwaddr offset,
 			   const char *name ) {
 	MC6845CRTC *crtc = g_new0 ( MC6845CRTC, 1 );
 
@@ -293,7 +292,7 @@ MC6845CRTC * mc6845_init ( MemoryRegion *parent, hwaddr offset, uint64_t size,
 
 	/* Register memory region */
 	memory_region_init_io ( &crtc->mr, &mc6845_ops, crtc, crtc->name,
-				size );
+				MC6845_SIZE );
 	memory_region_add_subregion ( parent, offset, &crtc->mr );
 
 	/* Register virtual machine state */
