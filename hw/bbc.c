@@ -27,6 +27,59 @@
 
 /******************************************************************************
  *
+ * I/O aliases
+ *
+ */
+
+/**
+ * Create I/O aliases
+ *
+ * @v mr		I/O peripheral memory region
+ * @v addr		Starting address of region to be aliased
+ * @v size		Total size of region to be aliased
+ * @v offset		Offset of peripheral within region
+ * @v stride		Distance between each alias
+ */
+static void bbc_io_alias_offset ( MemoryRegion *mr, hwaddr addr, uint64_t size,
+				  hwaddr offset, uint64_t stride ) {
+	MemoryRegion *address_space_mem = get_system_memory();
+	MemoryRegion *alias;
+	const char *alias_name;
+	hwaddr end;
+	unsigned int i;
+
+	/* Calculate end address for aliased region */
+	end = ( addr + size );
+
+	/* Skip first alias (which will be the original peripheral */
+	addr += stride;
+
+	/* Add aliases to fill out the memory space */
+	for ( i = 1 ; addr < end ; addr += stride, i++ ) {
+		alias = g_new0 ( MemoryRegion, 1 );
+		alias_name = g_strdup_printf ( "%s.%d",
+					       memory_region_name ( mr ), i );
+		memory_region_init_alias ( alias, alias_name, mr, 0,
+					   memory_region_size ( mr ) );
+		memory_region_add_subregion ( address_space_mem,
+					      ( addr + offset ), alias );
+	}
+}
+
+/**
+ * Create I/O aliases
+ *
+ * @v mr		I/O peripheral memory region
+ * @v addr		Starting address of region to be aliased
+ * @v size		Total size of region to be aliased
+ */
+static void bbc_io_alias ( MemoryRegion *mr, hwaddr addr, uint64_t size ) {
+
+	bbc_io_alias_offset ( mr, addr, size, 0, memory_region_size ( mr ) );
+}
+
+/******************************************************************************
+ *
  * ROM loading
  *
  */
@@ -83,6 +136,16 @@ static BBCROM * bbc_load_rom ( MemoryRegion *roms, hwaddr offset,
  *
  */
 
+/**
+ * Initialise MOS
+ *
+ * @v addr		Address
+ * @v size		Size
+ * @v low_size		Size of low portion of MOS
+ * @v high_size		Size of high portion of MOS
+ * @v name		Name
+ * @v raw_addr		Address of raw image of MOS
+ */
 static BBCMOS * bbc_mos_init ( hwaddr addr, uint64_t size, uint64_t low_size,
 			       uint64_t high_size, const char *name,
 			       hwaddr raw_addr ) {
@@ -259,12 +322,14 @@ static const VMStateDescription vmstate_bbc_paged_rom = {
  * @v roms_addr		Address of ROM bank memory region
  * @v count		Number of paged ROMs
  * @v select_addr	Address of paged ROM select register memory region
+ * @v select_size	Size of paged ROM select register memory region
  * @ret paged		Paged ROM
  */
 static BBCPagedROM * bbc_paged_rom_init ( hwaddr addr, uint64_t size,
 					  const char *name, hwaddr roms_addr,
 					  unsigned int count,
-					  hwaddr select_addr ) {
+					  hwaddr select_addr,
+					  uint64_t select_size ) {
 	MemoryRegion *address_space_mem = get_system_memory();
 	BBCPagedROM *paged = g_new0 ( BBCPagedROM, 1 );
 	const char *roms_name;
@@ -299,6 +364,7 @@ static BBCPagedROM * bbc_paged_rom_init ( hwaddr addr, uint64_t size,
 				paged, select_name, BBC_PAGED_ROM_SELECT_SIZE );
 	memory_region_add_subregion ( address_space_mem, select_addr,
 				      &paged->select );	
+	bbc_io_alias ( &paged->select, select_addr, select_size );
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, addr, &vmstate_bbc_paged_rom, paged );
@@ -321,6 +387,56 @@ static void bbc_paged_rom_load ( BBCPagedROM *paged, unsigned int page,
 	bbc_load_rom ( &paged->roms, bbc_paged_rom_offset ( paged, page ),
 		       bbc_paged_rom_targphys ( paged, page ), paged->size,
 		       name, filename );
+}
+
+/******************************************************************************
+ *
+ * 6845 CRTC (SHEILA &00-&07)
+ *
+ */
+
+/**
+ * Initialise CRTC
+ *
+ * @v addr		Address
+ * @v size		Size
+ * @ret crtc		CRTC
+ */
+static MC6845CRTC * bbc_crtc_init ( hwaddr addr, uint64_t size,
+				    const char *name ) {
+	MemoryRegion *address_space_mem = get_system_memory();
+	MC6845CRTC *crtc;
+
+	/* Initialise CRTC */
+	crtc = mc6845_init ( address_space_mem, addr, name );
+	bbc_io_alias ( &crtc->mr, addr, size );
+
+	return crtc;
+}
+
+/******************************************************************************
+ *
+ * 6850 ACIA (SHEILA &08-&0F)
+ *
+ */
+
+/**
+ * Initialise ACIA
+ *
+ * @v addr		Address
+ * @v size		Size
+ * @ret acia		ACIA
+ */
+static MC6850ACIA * bbc_acia_init ( hwaddr addr, uint64_t size,
+				    const char *name ) {
+	MemoryRegion *address_space_mem = get_system_memory();
+	MC6850ACIA *acia;
+
+	/* Initialise ACIA */
+	acia = mc6850_init ( address_space_mem, addr, name, serial_hds[0] );
+	bbc_io_alias ( &acia->mr, addr, size );
+
+	return acia;
 }
 
 /******************************************************************************
@@ -501,10 +617,12 @@ static const VMStateDescription vmstate_bbc_video_ula = {
  * Initialise video ULA
  *
  * @v addr		Address
+ * @v size		Size
  * @v name		Device name
  * @ret ula		Video ULA
  */
-static BBCVideoULA * bbc_video_ula_init ( hwaddr addr, const char *name ) {
+static BBCVideoULA * bbc_video_ula_init ( hwaddr addr, uint64_t size,
+					  const char *name ) {
 	MemoryRegion *address_space_mem = get_system_memory();
 	BBCVideoULA *ula = g_new0 ( BBCVideoULA, 1 );
 
@@ -516,6 +634,7 @@ static BBCVideoULA * bbc_video_ula_init ( hwaddr addr, const char *name ) {
 	memory_region_init_io ( &ula->mr, &bbc_video_ula_ops, ula, name,
 				BBC_VIDEO_ULA_SIZE );
 	memory_region_add_subregion ( address_space_mem, addr, &ula->mr );
+	bbc_io_alias ( &ula->mr, addr, size );
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, addr, &vmstate_bbc_video_ula, ula );
@@ -1008,12 +1127,14 @@ static const VMStateDescription vmstate_bbc_system_via = {
  * Initialise system VIA
  *
  * @v addr		Address
+ * @v size		Size
  * @v name		Device name
  * @v irq		Interrupt request line
  * @v dip		DIP switch settings
  * @ret via		System VIA
  */
-static BBCSystemVIA * bbc_system_via_init ( hwaddr addr, const char *name,
+static BBCSystemVIA * bbc_system_via_init ( hwaddr addr, uint64_t size,
+					    const char *name,
 					    qemu_irq irq, uint8_t dip ) {
 	MemoryRegion *address_space_mem = get_system_memory();
 	BBCSystemVIA *via = g_new0 ( BBCSystemVIA, 1 );
@@ -1022,6 +1143,7 @@ static BBCSystemVIA * bbc_system_via_init ( hwaddr addr, const char *name,
 	via->name = name;
 	via->via = m6522_init ( address_space_mem, addr, name, via,
 				&bbc_system_via_ops, irq, BBC_1MHZ_TICK_NS );
+	bbc_io_alias ( &via->via->mr, addr, size );
 
 	/* Initialise keyboard */
 	bbc_keyboard_dip ( via, dip );
@@ -1073,12 +1195,13 @@ static const VMStateDescription vmstate_bbc_user_via = {
  * Initialise user VIA
  *
  * @v addr		Address
+ * @v size		Size
  * @v name		Device name
  * @v irq		Interrupt request line
  * @ret via		User VIA
  */
-static BBCUserVIA * bbc_user_via_init ( hwaddr addr, const char *name,
-					qemu_irq irq ) {
+static BBCUserVIA * bbc_user_via_init ( hwaddr addr, uint64_t size,
+					const char *name, qemu_irq irq ) {
 	MemoryRegion *address_space_mem = get_system_memory();
 	BBCUserVIA *via = g_new0 ( BBCUserVIA, 1 );
 
@@ -1086,6 +1209,7 @@ static BBCUserVIA * bbc_user_via_init ( hwaddr addr, const char *name,
 	via->name = name;
 	via->via = m6522_init ( address_space_mem, addr, name, via,
 				&bbc_user_via_ops, irq, BBC_1MHZ_TICK_NS );
+	bbc_io_alias ( &via->via->mr, addr, size );
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, addr, &vmstate_bbc_user_via, via );
@@ -1193,13 +1317,15 @@ static const VMStateDescription vmstate_bbc_1770_fdc = {
  * Initialise 1770 FDC
  *
  * @v addr		Address
+ * @v size		Size
  * @v name		Device name
  * @v drq		Data request non-maskable interrupt request line
  * @v intrq		Completion non-maskable interrupt request line
  * @ret fdc		1770 FDC
  */
-static BBC1770FDC * bbc_1770_fdc_init ( hwaddr addr, const char *name,
-					qemu_irq drq, qemu_irq intrq ) {
+static BBC1770FDC * bbc_1770_fdc_init ( hwaddr addr, uint64_t size,
+					const char *name, qemu_irq drq,
+					qemu_irq intrq ) {
 	MemoryRegion *address_space_mem = get_system_memory();
 	BBC1770FDC *fdc = g_new0 ( BBC1770FDC, 1 );
 	DriveInfo *fds[WD1770_DRIVE_COUNT];
@@ -1217,13 +1343,16 @@ static BBC1770FDC * bbc_1770_fdc_init ( hwaddr addr, const char *name,
 	fdc->name = name;
 	for ( i = 0 ; i < ARRAY_SIZE ( fds ) ; i++ )
 		fds[i] = drive_get ( IF_FLOPPY, 0, i );
-	fdc->fdc = wd1770_init ( ( addr + BBC_1770_FDC_BASE ),
+	fdc->fdc = wd1770_init ( ( addr + BBC_1770_FDC_WD1770_OFFSET ),
 				 drq, intrq, fds );
 
 	/* Register memory region */
 	memory_region_init_io ( &fdc->mr, &bbc_1770_fdc_ops, fdc, fdc->name,
-				BBC_1770_FDC_SIZE );
+				BBC_1770_FDC_CONTROL_SIZE );
 	memory_region_add_subregion ( address_space_mem, addr, &fdc->mr );
+	bbc_io_alias_offset ( &fdc->mr, addr, size, 0, BBC_1770_FDC_SIZE );
+	bbc_io_alias_offset ( &fdc->fdc->mr, addr, size,
+			      BBC_1770_FDC_WD1770_OFFSET, BBC_1770_FDC_SIZE );
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, addr, &vmstate_bbc_1770_fdc, fdc );
@@ -1325,10 +1454,11 @@ static const VMStateDescription vmstate_bbc_adc = {
  * Initialise analogue to digital converter
  *
  * @v addr		Address
+ * @v size		Size
  * @v name		Device name
  * @ret adc		ADC
  */
-static BBCADC * bbc_adc_init ( hwaddr addr, const char *name ) {
+static BBCADC * bbc_adc_init ( hwaddr addr, uint64_t size, const char *name ) {
 	MemoryRegion *address_space_mem = get_system_memory();
 	BBCADC *adc = g_new0 ( BBCADC, 1 );
 
@@ -1339,6 +1469,7 @@ static BBCADC * bbc_adc_init ( hwaddr addr, const char *name ) {
 	memory_region_init_io ( &adc->mr, &bbc_adc_ops, adc, name,
 				BBC_ADC_SIZE );
 	memory_region_add_subregion ( address_space_mem, addr, &adc->mr );
+	bbc_io_alias ( &adc->mr, addr, size );
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, addr, &vmstate_bbc_adc, adc );
@@ -1545,7 +1676,8 @@ static void bbc_rom_init ( BBCMicro *bbc, const char *default_filename,
 					  BBC_PAGED_ROM_SIZE, "paged_rom",
 					  BBC_PAGED_ROM_VIRTUAL_BASE,
 					  BBC_PAGED_ROM_COUNT,
-					  BBC_SHEILA_PAGED_ROM_SELECT_BASE );
+					  BBC_SHEILA_PAGED_ROM_SELECT_BASE,
+					  BBC_SHEILA_PAGED_ROM_SELECT_SIZE );
 
 	/* Load MOS ROM */
 	bbc_mos_load ( bbc->mos, default_filename );
@@ -1580,7 +1712,6 @@ static void bbc_cpu_init ( BBCMicro *bbc, const char *cpu_model,
  * @v bbc		BBC micro
  */
 static void bbc_io_init ( BBCMicro *bbc ) {
-	MemoryRegion *address_space_mem = get_system_memory();
 
 	/* Initialise FRED as an unimplemented I/O region */
 	bbc->fred = bbc_unimplemented_init ( BBC_FRED_BASE, BBC_FRED_SIZE,
@@ -1590,35 +1721,40 @@ static void bbc_io_init ( BBCMicro *bbc ) {
 	bbc->jim = bbc_unimplemented_init ( BBC_JIM_BASE, BBC_JIM_SIZE, "jim" );
 
 	/* Initialise CRTC */
-	bbc->crtc = mc6845_init ( address_space_mem, BBC_SHEILA_CRTC_BASE,
-				  "crtc" );
+	bbc->crtc = bbc_crtc_init ( BBC_SHEILA_CRTC_BASE, BBC_SHEILA_CRTC_SIZE,
+				    "crtc" );
 
 	/* Initialise serial system */
-	bbc->acia = mc6850_init ( address_space_mem, BBC_SHEILA_ACIA_BASE,
-				  "acia", serial_hds[0] );
+	bbc->acia = bbc_acia_init ( BBC_SHEILA_ACIA_BASE, BBC_SHEILA_ACIA_SIZE,
+				    "acia" );
 
 	/* Initialise video ULA */
 	bbc->video_ula = bbc_video_ula_init ( BBC_SHEILA_VIDEO_ULA_BASE,
+					      BBC_SHEILA_VIDEO_ULA_SIZE,
 					      "video_ula" );
 
 	/* Initialise system VIA */
 	bbc->system_via = bbc_system_via_init ( BBC_SHEILA_SYSTEM_VIA_BASE,
+						BBC_SHEILA_SYSTEM_VIA_SIZE,
 						"system_via",
 						bbc->irq[BBC_IRQ_SYSTEM_VIA],
 						bbc_dip );
 
 	/* Initialise user VIA */
 	bbc->user_via = bbc_user_via_init ( BBC_SHEILA_USER_VIA_BASE,
+					    BBC_SHEILA_USER_VIA_SIZE,
 					    "user_via",
 					    bbc->irq[BBC_IRQ_USER_VIA] );
 
 	/* Initialise floppy disc controller */
-	bbc->fdc = bbc_1770_fdc_init ( BBC_SHEILA_FDC_BASE, "fdc",
+	bbc->fdc = bbc_1770_fdc_init ( BBC_SHEILA_FDC_BASE,
+				       BBC_SHEILA_FDC_SIZE, "fdc",
 				       bbc->nmi[BBC_NMI_FDC_DRQ],
 				       bbc->nmi[BBC_NMI_FDC_INTRQ] );
 
 	/* Initialise analogue to digital converter */
-	bbc->adc = bbc_adc_init ( BBC_SHEILA_ADC_BASE, "adc" );
+	bbc->adc = bbc_adc_init ( BBC_SHEILA_ADC_BASE, BBC_SHEILA_ADC_SIZE,
+				  "adc" );
 }
 
 /**

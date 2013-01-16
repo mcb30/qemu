@@ -88,10 +88,11 @@
 #define BBC_LATCH_SHIFT_LOCK 7
 
 /* Floppy disc controller */
-#define BBC_1770_FDC_CONTROL_BASE 0x04
+#define BBC_1770_FDC_CONTROL_OFFSET 0x00
 #define BBC_1770_FDC_CONTROL_SIZE 0x04
-#define BBC_1770_FDC_BASE 0x04
-#define BBC_1770_FDC_SIZE 0x04
+#define BBC_1770_FDC_WD1770_OFFSET 0x04
+#define BBC_1770_FDC_WD1770_SIZE 0x04
+#define BBC_1770_FDC_SIZE 0x08
 
 /* Floppy disc control register */
 #define BBC_1770_FDC_DRIVE_MASK 0x03
