@@ -1010,14 +1010,50 @@ static void bbc_1770_fdc_write ( void *opaque, hwaddr addr, uint64_t data64,
 				 unsigned int size ) {
 	BBC1770FDC *fdc = opaque;
 	uint8_t data = data64;
+	int drive;
+	unsigned int side;
+	bool single_density;
+	bool master_reset;
 
-	/* Write to specified register */
-	switch ( addr & ( BBC_1770_FDC_SIZE - 1 ) ) {
+	/* Write to control register */
+	fdc->control = data;
+
+	/* Select drive number */
+	switch ( data & BBC_1770_FDC_DRIVE_MASK ) {
+	case 0:
+		/* No drive selected */
+		drive = WD1770_NO_DRIVE;
+		break;
+	case BBC_1770_FDC_DRIVE_0:
+		drive = 0;
+		break;
+	case BBC_1770_FDC_DRIVE_1:
+		drive = 1;
+		break;
 	default:
-		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to "
-				"0x%02lx\n", fdc->name, data, addr );
+		/* Invalid combination */
+		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented simultaneous "
+				"operation of both drives\n", fdc->name );
+		drive = WD1770_NO_DRIVE;
 		break;
 	}
+	wd1770_set_drive ( fdc->fdc, drive );
+
+	/* Decode side number */
+	side = ( ( data & BBC_1770_FDC_SIDE_1 ) ? 1 : 0 );
+	wd1770_set_side ( fdc->fdc, side );
+
+	/* Decode density */
+	single_density = ( !! ( data & BBC_1770_FDC_SINGLE_DENSITY ) );
+	wd1770_set_single_density ( fdc->fdc, single_density );
+
+	/* Decode master reset.  This line is supposed to be
+	 * level-sensitive; the real hardware would be held in reset
+	 * while the line remained active.
+	 */
+	master_reset = ( ! ( data & BBC_1770_FDC_NOT_MASTER_RESET ) );
+	if ( master_reset )
+		wd1770_reset ( fdc->fdc );
 }
 
 /** 1770 FDC operations */
@@ -1053,6 +1089,8 @@ static BBC1770FDC * bbc_1770_fdc_init ( MemoryRegion *parent, hwaddr offset,
 					qemu_irq drq, qemu_irq intrq ) {
 	BBC1770FDC *fdc = g_new0 ( BBC1770FDC, 1 );
 	const char *bbc_1770_fdc_name = g_strdup_printf ( "%s.ctrl", name );
+	DriveInfo *fds[WD1770_DRIVE_COUNT];
+	unsigned int i;
 
 	/* The memory map for this peripheral is a little strange.
 	 * The BBC was originally designed to take an Intel 8271 FDC,
@@ -1064,8 +1102,12 @@ static BBC1770FDC * bbc_1770_fdc_init ( MemoryRegion *parent, hwaddr offset,
 
 	/* Initialise 1770 FDC */
 	fdc->name = bbc_1770_fdc_name;
-	fdc->fdc = wd1770_init ( parent, ( offset + BBC_1770_FDC_BASE ),
-				 BBC_1770_FDC_SIZE, name, drq, intrq );
+	for ( i = 0 ; i < ARRAY_SIZE ( fds ) ; i++ )
+		fds[i] = drive_get ( IF_FLOPPY, 0, i );
+	//
+	fdc->fdc = wd1770_init ( ( BBC_SHEILA_BASE + offset +
+				   BBC_1770_FDC_BASE ),
+				 drq, intrq, fds );
 
 	/* Register memory region */
 	memory_region_init_io ( &fdc->mr, &bbc_1770_fdc_ops, fdc, fdc->name,

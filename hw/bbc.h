@@ -88,6 +88,14 @@
 #define BBC_1770_FDC_BASE 0x04
 #define BBC_1770_FDC_SIZE 0x04
 
+/* Floppy disc control register */
+#define BBC_1770_FDC_DRIVE_MASK 0x03
+#define BBC_1770_FDC_DRIVE_0 0x01
+#define BBC_1770_FDC_DRIVE_1 0x02
+#define BBC_1770_FDC_SIDE_1 0x04
+#define BBC_1770_FDC_SINGLE_DENSITY 0x08
+#define BBC_1770_FDC_NOT_MASTER_RESET 0x20
+
 /* Analogue to digital converter */
 #define BBC_ADC_SIZE 0x04
 #define BBC_ADC_START 0x00
