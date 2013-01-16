@@ -50,12 +50,15 @@ typedef struct {
 
 /** A 6522 VIA control line */
 typedef struct {
-	/** IRQ */
-	qemu_irq irq;
-	/** Previous state of control line input */
-	int previous;
+	/** IRQ when used as an input */
+	qemu_irq in;
+	/** IRQ when used as an output */
+	qemu_irq out;
 	/** Interrupt flag bit */
 	uint8_t ifr;
+
+	/** Previous state of control line input */
+	int32_t previous;
 } M6522ViaControl;
 
 /** A 6522 VIA port */
@@ -72,13 +75,6 @@ typedef struct {
 	M6522ViaControl c1;
 	/** Control line 2 */
 	M6522ViaControl c2;
-
-	/** IRQ for control line 2 */
-	qemu_irq c2_irq;
-	/** Previous state of control line 2 input */
-	int c2_prev;
-	/** Interrupt flag bit for control line 2 */
-	uint8_t c2_ifr;
 
 	/** Output register */
 	uint8_t or;
@@ -173,7 +169,9 @@ struct M6522VIA {
 /* Peripheral control register */
 #define M6522_PCR_CA_SHIFT 0
 #define M6522_PCR_CB_SHIFT 4
+#define M6522_PCR_C1_MASK 0x01
 #define M6522_PCR_C1_POSITIVE 0x01
+#define M6522_PCR_C2_MASK 0x0e
 #define M6522_PCR_C2_INPUT_INDEPENDENT 0x02
 #define M6522_PCR_C2_OUTPUT_PULSE 0x02
 #define M6522_PCR_C2_OUTPUT_FIXED_LEVEL 0x02

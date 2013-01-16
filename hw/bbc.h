@@ -261,6 +261,23 @@ typedef struct {
 } BBCSystemVIA;
 
 /**
+ * Parallel port
+ */
+typedef struct {
+	/** Character device (if connected) */
+	CharDriverState *chr;
+	/** Strobe interrupt input */
+	qemu_irq strobe;
+	/** Acknowledge interrupt output */
+	qemu_irq ack;
+
+	/** Previous state of strobe interrupt */
+	int32_t previous;
+	/** Current output data */
+	uint8_t data;
+} BBCParallel;
+
+/**
  * User VIA
  */
 typedef struct {
@@ -268,6 +285,8 @@ typedef struct {
 	const char *name;
 	/** 6522 VIA */
 	M6522VIA *via;
+	/** Parallel port */
+	BBCParallel parallel;
 } BBCUserVIA;
 
 /**

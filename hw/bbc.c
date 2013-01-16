@@ -22,6 +22,7 @@
 #include "exec/address-spaces.h"
 #include "sysemu/sysemu.h"
 #include "ui/console.h"
+#include "char/char.h"
 #include "loader.h"
 #include "bbc.h"
 
@@ -1047,7 +1048,7 @@ static void bbc_keyboard_update_irq ( BBCSystemVIA *via ) {
 	keys_pressed &= BBC_KEYBOARD_IRQ_ROW_MASK;
 
 	/* Update VIA's CA2 interrupt line */
-	qemu_set_irq ( via->via->a.c2.irq, keys_pressed );
+	qemu_set_irq ( via->via->a.c2.in, keys_pressed );
 }
 
 /**
@@ -1350,9 +1351,43 @@ static BBCSystemVIA * bbc_system_via_init ( hwaddr addr, uint64_t size,
  */
 static void bbc_parallel_write ( void *opaque, uint8_t data ) {
 	BBCUserVIA *via = opaque;
+	BBCParallel *parallel = &via->parallel;
 
+	parallel->data = data;
+}
+
+/**
+ * Strobe parallel port (user VIA port A line C2)
+ *
+ * @v opaque		User VIA
+ * @v n			Interrupt number
+ * @v level		Interrupt level
+ */
+static void bbc_parallel_strobe ( void *opaque, int n, int level ) {
+	BBCUserVIA *via = opaque;
+	BBCParallel *parallel = &via->parallel;
+	uint8_t data = via->parallel.data;
+
+	/* Do nothing unless this is a falling edge */
+	level = ( !! level );
+	if ( level == parallel->previous )
+		return;
+	parallel->previous = level;
+	if ( ! level )
+		return;
+	
 	qemu_log_mask ( CPU_LOG_IOPORT, "%s: print character &%02x '%c'\n",
 			via->name, data, ( isprint ( data ) ? data : '.' ) );
+
+	/* Send data to parallel port, if connected */
+	if ( parallel->chr ) {
+		qemu_chr_fe_write ( parallel->chr, &data,
+				    sizeof ( data ) );
+	}
+
+	/* Acknowledge data via CA1 */
+	qemu_set_irq ( via->via->a.c1.in, 0 );
+	qemu_set_irq ( via->via->a.c1.in, 1 );
 }
 
 /** User VIA operations */
@@ -1368,6 +1403,8 @@ static const VMStateDescription vmstate_bbc_user_via = {
 	.version_id = 1,
 	.minimum_version_id = 1,
 	.fields = ( VMStateField[] ) {
+		VMSTATE_INT32 ( parallel.previous, BBCUserVIA ),
+		VMSTATE_UINT8 ( parallel.data, BBCUserVIA ),
 		VMSTATE_END_OF_LIST()
 	},
 };
@@ -1379,18 +1416,30 @@ static const VMStateDescription vmstate_bbc_user_via = {
  * @v size		Size
  * @v name		Device name
  * @v irq		Interrupt request line
+ * @v chr		Character device, if any
  * @ret via		User VIA
  */
 static BBCUserVIA * bbc_user_via_init ( hwaddr addr, uint64_t size,
-					const char *name, qemu_irq irq ) {
+					const char *name, qemu_irq irq,
+					CharDriverState *chr ) {
 	MemoryRegion *address_space_mem = get_system_memory();
 	BBCUserVIA *via = g_new0 ( BBCUserVIA, 1 );
+	BBCParallel *parallel = &via->parallel;
 
 	/* Initialise user VIA */
 	via->name = name;
 	via->via = m6522_init ( address_space_mem, addr, name, via,
 				&bbc_user_via_ops, irq, BBC_1MHZ_TICK_NS );
 	bbc_io_alias ( &via->via->mr, addr, size );
+
+	/* Initialise parallel port */
+	parallel->chr = chr;
+	parallel->strobe =
+		qemu_allocate_irqs ( bbc_parallel_strobe, via, 1 )[0];
+	parallel->previous = 1;
+	via->via->a.c2.out = parallel->strobe;
+	parallel->ack = via->via->a.c1.in;
+	qemu_set_irq ( parallel->ack, 1 );
 
 	/* Register virtual machine state */
 	vmstate_register ( NULL, addr, &vmstate_bbc_user_via, via );
@@ -1829,7 +1878,8 @@ static void bbc_io_init ( BBCMicro *bbc ) {
 	bbc->user_via = bbc_user_via_init ( BBC_SHEILA_USER_VIA_BASE,
 					    BBC_SHEILA_USER_VIA_SIZE,
 					    "user_via",
-					    bbc->irq[BBC_IRQ_USER_VIA] );
+					    bbc->irq[BBC_IRQ_USER_VIA],
+					    parallel_hds[0] );
 
 	/* Initialise floppy disc controller */
 	bbc->fdc = bbc_1770_fdc_init ( BBC_SHEILA_FDC_BASE,

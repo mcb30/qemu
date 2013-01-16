@@ -62,9 +62,13 @@ static void m6522_update_irq ( M6522VIA *via ) {
  * @v mask		Mask of interrupts to set
  */
 static inline void m6522_set_interrupts ( M6522VIA *via, uint8_t mask ) {
+	uint8_t ifr;
 
 	/* Set interrupts in IFR */
-	via->ifr |= ( mask & ~M6522_INT_IRQ );
+	ifr = ( via->ifr | ( mask & ~M6522_INT_IRQ ) );
+	if ( ifr != via->ifr )
+		LOG_M6522 ( "%s: IFR setting 0x%02x\n", via->name, mask );
+	via->ifr = ifr;
 
 	/* Update interrupt request */
 	m6522_update_irq ( via );
@@ -77,9 +81,13 @@ static inline void m6522_set_interrupts ( M6522VIA *via, uint8_t mask ) {
  * @v mask		Mask of interrupts to clear
  */
 static inline void m6522_clear_interrupts ( M6522VIA *via, uint8_t mask ) {
+	uint8_t ifr;
 
 	/* Clear interrupts in IFR */
-	via->ifr &= ~( mask & ~M6522_INT_IRQ );
+	ifr = ( via->ifr & ~( mask & ~M6522_INT_IRQ ) );
+	if ( ifr != via->ifr )
+		LOG_M6522 ( "%s: IFR clearing 0x%02x\n", via->name, mask );
+	via->ifr = ifr;
 
 	/* Update interrupt request */
 	m6522_update_irq ( via );
@@ -108,7 +116,6 @@ static void m6522_ifr_write ( M6522VIA *via, uint8_t data ) {
 
 	/* Decode data */
 	mask = ( data & ~M6522_INT_IRQ );
-	LOG_M6522 ( "%s: IFR clearing 0x%02x\n", via->name, mask );
 
 	/* Clear interrupts */
 	m6522_clear_interrupts ( via, mask );
@@ -157,13 +164,13 @@ static void m6522_ier_write ( M6522VIA *via, uint8_t data ) {
 }
 
 /**
- * Handle control line 1 interrupt
+ * Handle control line 1 input
  *
  * @v opaque		Port
  * @v n			Interrupt number
  * @v level		Interrupt level
  */
-static void m6522_c1_irq ( void *opaque, int n, int level ) {
+static void m6522_c1_in ( void *opaque, int n, int level ) {
 	M6522VIAPort *port = opaque;
 	M6522VIA *via = port->via;
 	unsigned int pcr = ( via->pcr >> port->pcr_shift );
@@ -176,19 +183,28 @@ static void m6522_c1_irq ( void *opaque, int n, int level ) {
 	LOG_M6522 ( "%s: C%s1 %s\n", via->name, port->name,
 		    ( level ? "high" : "low" ) );
 
-	/* Assert interrupt if new level matches sensitive edge */
-	if ( level == ( !! ( pcr & M6522_PCR_C1_POSITIVE ) ) )
-		m6522_set_interrupts ( via, port->c1.ifr );
+	/* Do nothing more unless new level matches sensitive edge */
+	if ( level != ( !! ( pcr & M6522_PCR_C1_POSITIVE ) ) )
+		return;
+
+	/* Set corresponding C2 output high if configured in handshake
+	 * output mode (i.e. output, not fixed, not pulse).
+	 */
+	if ( ( pcr & M6522_PCR_C2_MASK ) == M6522_PCR_C2_OUTPUT )
+		qemu_set_irq ( port->c2.out, 1 );
+
+	/* Assert interrupt */
+	m6522_set_interrupts ( via, port->c1.ifr );
 }
 
 /**
- * Handle control line 2 interrupt
+ * Handle control line 2 input
  *
  * @v opaque		Port
  * @v n			Interrupt number
  * @v level		Interrupt level
  */
-static void m6522_c2_irq ( void *opaque, int n, int level ) {
+static void m6522_c2_in ( void *opaque, int n, int level ) {
 	M6522VIAPort *port = opaque;
 	M6522VIA *via = port->via;
 	unsigned int pcr = ( via->pcr >> port->pcr_shift );
@@ -208,6 +224,25 @@ static void m6522_c2_irq ( void *opaque, int n, int level ) {
 	/* Assert interrupt if new level matches sensitive edge */
 	if ( level == ( !! ( pcr & M6522_PCR_C2_INPUT_POSITIVE ) ) )
 		m6522_set_interrupts ( via, port->c2.ifr );
+}
+
+/**
+ * Configure control line 2 output
+ *
+ */
+static void m6522_c2_out_configure ( M6522VIA *via, M6522VIAPort *port ) {
+	unsigned int pcr = ( via->pcr >> port->pcr_shift );
+	int level;
+
+	/* Do nothing if line is configured as an input */
+	if ( ! ( pcr & M6522_PCR_C2_OUTPUT ) )
+		return;
+
+	/* Set output level if configured as a fixed output */
+	if ( pcr & M6522_PCR_C2_OUTPUT_FIXED ) {
+		level = ( !! ( pcr & M6522_PCR_C2_OUTPUT_FIXED_LEVEL ) );
+		qemu_set_irq ( port->c2.out, level );
+	}
 }
 
 /******************************************************************************
@@ -257,7 +292,7 @@ static uint8_t m6522_ir_read ( M6522VIA *via, M6522VIAPort *port,
 		data = ( ( data & ~port->ddr ) | ( port->or & port->ddr ) );
 	}
 
-	/* Clear interrupts */
+	/* Clear interrupts, if applicable */
 	if ( handshake )
 		m6522_iror_clear_interrupts ( via, port );
 
@@ -276,6 +311,7 @@ static uint8_t m6522_ir_read ( M6522VIA *via, M6522VIAPort *port,
  */
 static void m6522_or_write ( M6522VIA *via, M6522VIAPort *port, uint8_t data,
 			     int handshake ) {
+	unsigned int pcr = ( via->pcr >> port->pcr_shift );
 
 	LOG_M6522 ( "%s: OR%s%s=0x%02x\n", via->name, port->name,
 		    ( handshake ? "" : "_NO_HS" ), data );
@@ -287,9 +323,24 @@ static void m6522_or_write ( M6522VIA *via, M6522VIAPort *port, uint8_t data,
 	if ( port->ops->output )
 		port->ops->output ( via->opaque, data );
 
-	/* Clear interrupts */
+	/* Clear interrupts, if applicable */
 	if ( handshake )
 		m6522_iror_clear_interrupts ( via, port );
+
+	/* Generate C2 output signal, if applicable */
+	if ( handshake &&
+	     ( ( pcr & ( M6522_PCR_C2_OUTPUT | M6522_PCR_C2_OUTPUT_FIXED ) ) ==
+	       M6522_PCR_C2_OUTPUT ) ) {
+
+		/* Both handshake and pulse mode set the output low */
+		qemu_set_irq ( port->c2.out, 0 );
+
+		/* Pulse mode resets the output high after one cycle;
+		 * we reset it high immediately.
+		 */
+		if ( pcr & M6522_PCR_C2_OUTPUT_PULSE )
+			qemu_set_irq ( port->c2.out, 1 );
+	}
 }
 
 /**
@@ -615,6 +666,10 @@ static void m6522_pcr_write ( M6522VIA *via, uint8_t data ) {
 
 	/* Write peripheral control register */
 	via->pcr = data;
+
+	/* Update output control line configuration for both ports */
+	m6522_c2_out_configure ( via, &via->a );
+	m6522_c2_out_configure ( via, &via->b );
 }
 
 /******************************************************************************
@@ -777,10 +832,14 @@ static const VMStateDescription vmstate_m6522 = {
 	.version_id = 1,
 	.minimum_version_id = 1,
 	.fields = ( VMStateField[] ) {
-		VMSTATE_UINT8 ( b.or, M6522VIA ),
-		VMSTATE_UINT8 ( b.ddr, M6522VIA ),
 		VMSTATE_UINT8 ( a.or, M6522VIA ),
 		VMSTATE_UINT8 ( a.ddr, M6522VIA ),
+		VMSTATE_INT32 ( a.c1.previous, M6522VIA ),
+		VMSTATE_INT32 ( a.c2.previous, M6522VIA ),
+		VMSTATE_UINT8 ( b.or, M6522VIA ),
+		VMSTATE_UINT8 ( b.ddr, M6522VIA ),
+		VMSTATE_INT32 ( b.c1.previous, M6522VIA ),
+		VMSTATE_INT32 ( b.c2.previous, M6522VIA ),
 		VMSTATE_UINT16 ( t1.latch, M6522VIA ),
 		VMSTATE_UINT16 ( t1.counter, M6522VIA ),
 		VMSTATE_UINT16 ( t2.latch, M6522VIA ),
@@ -830,10 +889,10 @@ M6522VIA * m6522_init ( MemoryRegion *parent, hwaddr offset,
 	via->a.c2.ifr = M6522_INT_CA2;
 	via->b.c1.ifr = M6522_INT_CB1;
 	via->b.c2.ifr = M6522_INT_CB2;
-	via->a.c1.irq = qemu_allocate_irqs ( m6522_c1_irq, &via->a, 1 )[0];
-	via->b.c1.irq = qemu_allocate_irqs ( m6522_c1_irq, &via->b, 1 )[0];
-	via->a.c2.irq = qemu_allocate_irqs ( m6522_c2_irq, &via->a, 1 )[0];
-	via->b.c2.irq = qemu_allocate_irqs ( m6522_c2_irq, &via->b, 1 )[0];
+	via->a.c1.in = qemu_allocate_irqs ( m6522_c1_in, &via->a, 1 )[0];
+	via->b.c1.in = qemu_allocate_irqs ( m6522_c1_in, &via->b, 1 )[0];
+	via->a.c2.in = qemu_allocate_irqs ( m6522_c2_in, &via->a, 1 )[0];
+	via->b.c2.in = qemu_allocate_irqs ( m6522_c2_in, &via->b, 1 )[0];
 
 	/* Initialise timers */
 	via->t1.via = via;
