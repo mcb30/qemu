@@ -460,6 +460,89 @@ static void bbc_paged_rom_load ( BBCPagedROM *paged, unsigned int page,
 
 /******************************************************************************
  *
+ * Interrupts
+ *
+ */
+
+/**
+ * Interrupt handler
+ *
+ * @v bbc		BBC Micro
+ * @v active		Interrupt set status
+ * @v count		Number of interrupts within set
+ * @v cpu_irq_type	CPU interrupt type
+ * @v n			Interrupt number
+ * @v level		Interrupt level
+ */
+static void bbc_interrupt ( BBCMicro *bbc, bool *active, unsigned int count,
+			    int cpu_irq_type, int n, int level ) {
+	unsigned int i;
+
+	/* Record status of this interrupt */
+	active[n] = level;
+
+	/* If this interrupt is active, assert the CPU interrupt */
+	if ( level ) {
+		cpu_interrupt ( bbc->cpu, cpu_irq_type );
+		return;
+	}
+
+	/* Otherwise, if any interrupt is active, leave the CPU
+	 * interrupt asserted.
+	 */
+	for ( i = 0 ; i < count ; i++ ) {
+		if ( active[i] )
+			return;
+	}
+
+	/* Otherwise, deassert the CPU interrupt */
+	cpu_reset_interrupt ( bbc->cpu, cpu_irq_type );
+}
+
+/**
+ * IRQ handler
+ *
+ * @v opaque		BBC Micro
+ * @v n			Interrupt number
+ * @v level		Interrupt level
+ */
+static void bbc_irq_handler ( void *opaque, int n, int level ) {
+	BBCMicro *bbc = opaque;
+
+	/* Control CPU IRQ pin */
+	bbc_interrupt ( bbc, bbc->irq_active, BBC_IRQ_COUNT,
+			CPU_INTERRUPT_HARD, n, level );
+}
+
+/**
+ * NMI handler
+ *
+ * @v opaque		BBC Micro
+ * @v n			Interrupt number
+ * @v level		Interrupt level
+ */
+static void bbc_nmi_handler ( void *opaque, int n, int level ) {
+	BBCMicro *bbc = opaque;
+
+	/* Control CPU NMI pin */
+	bbc_interrupt ( bbc, bbc->nmi_active, BBC_NMI_COUNT,
+			CPU_INTERRUPT_NMI, n, level );
+}
+
+/**
+ * Initialise interrupts
+ *
+ * @v bbc		BBC Micro
+ */
+static void bbc_interrupts_init ( BBCMicro *bbc ) {
+
+	/* Allocate IRQ and NMI interrupts and set inactive (high) */
+	bbc->irq = qemu_allocate_irqs ( bbc_irq_handler, bbc, BBC_IRQ_COUNT );
+	bbc->nmi = qemu_allocate_irqs ( bbc_nmi_handler, bbc, BBC_NMI_COUNT );
+}
+
+/******************************************************************************
+ *
  * 6845 CRTC (SHEILA &00-&07)
  *
  */
@@ -1077,7 +1160,7 @@ static void bbc_keyboard_leds ( BBCSystemVIA *via ) {
  * @v via		System VIA
  * @v dip		DIP switch settings
  */
-static void bbc_keyboard_dip ( BBCSystemVIA *via, uint8_t dip ) {
+static void bbc_keyboard_press_dip ( BBCSystemVIA *via, uint8_t dip ) {
 	unsigned int i;
 	unsigned int row;
 	unsigned int column;
@@ -1232,8 +1315,8 @@ static const VMStateDescription vmstate_bbc_system_via = {
  * @ret via		System VIA
  */
 static BBCSystemVIA * bbc_system_via_init ( hwaddr addr, uint64_t size,
-					    const char *name,
-					    qemu_irq irq, uint8_t dip ) {
+					    const char *name, qemu_irq irq,
+					    uint8_t dip ) {
 	MemoryRegion *address_space_mem = get_system_memory();
 	BBCSystemVIA *via = g_new0 ( BBCSystemVIA, 1 );
 
@@ -1244,7 +1327,7 @@ static BBCSystemVIA * bbc_system_via_init ( hwaddr addr, uint64_t size,
 	bbc_io_alias ( &via->via->mr, addr, size );
 
 	/* Initialise keyboard */
-	bbc_keyboard_dip ( via, dip );
+	bbc_keyboard_press_dip ( via, dip );
 	qemu_add_kbd_event_handler ( bbc_keyboard_event, via );
 
 	/* Register virtual machine state */
@@ -1631,95 +1714,9 @@ static BBCTube * bbc_tube_init ( hwaddr addr, uint64_t size,
 
 /******************************************************************************
  *
- * Interrupts
- *
- */
-
-/**
- * Interrupt handler
- *
- * @v bbc		BBC Micro
- * @v active		Interrupt set status
- * @v count		Number of interrupts within set
- * @v cpu_irq_type	CPU interrupt type
- * @v n			Interrupt number
- * @v level		Interrupt level
- */
-static void bbc_interrupt ( BBCMicro *bbc, bool *active, unsigned int count,
-			    int cpu_irq_type, int n, int level ) {
-	unsigned int i;
-
-	/* Record status of this interrupt */
-	active[n] = level;
-
-	/* If this interrupt is active, assert the CPU interrupt */
-	if ( level ) {
-		cpu_interrupt ( bbc->cpu, cpu_irq_type );
-		return;
-	}
-
-	/* Otherwise, if any interrupt is active, leave the CPU
-	 * interrupt asserted.
-	 */
-	for ( i = 0 ; i < count ; i++ ) {
-		if ( active[i] )
-			return;
-	}
-
-	/* Otherwise, deassert the CPU interrupt */
-	cpu_reset_interrupt ( bbc->cpu, cpu_irq_type );
-}
-
-/**
- * IRQ handler
- *
- * @v opaque		BBC Micro
- * @v n			Interrupt number
- * @v level		Interrupt level
- */
-static void bbc_irq_handler ( void *opaque, int n, int level ) {
-	BBCMicro *bbc = opaque;
-
-	/* Control CPU IRQ pin */
-	bbc_interrupt ( bbc, bbc->irq_active, BBC_IRQ_COUNT,
-			CPU_INTERRUPT_HARD, n, level );
-}
-
-/**
- * NMI handler
- *
- * @v opaque		BBC Micro
- * @v n			Interrupt number
- * @v level		Interrupt level
- */
-static void bbc_nmi_handler ( void *opaque, int n, int level ) {
-	BBCMicro *bbc = opaque;
-
-	/* Control CPU NMI pin */
-	bbc_interrupt ( bbc, bbc->nmi_active, BBC_NMI_COUNT,
-			CPU_INTERRUPT_NMI, n, level );
-}
-
-/**
- * Initialise interrupts
- *
- * @v bbc		BBC Micro
- */
-static void bbc_interrupts_init ( BBCMicro *bbc ) {
-
-	/* Allocate IRQ and NMI interrupts and set inactive (high) */
-	bbc->irq = qemu_allocate_irqs ( bbc_irq_handler, bbc, BBC_IRQ_COUNT );
-	bbc->nmi = qemu_allocate_irqs ( bbc_nmi_handler, bbc, BBC_NMI_COUNT );
-}
-
-/******************************************************************************
- *
  * Machine initialisation
  *
  */
-
-/** Startup DIP switches */
-static const uint8_t bbc_dip = 0x07;
 
 /**
  * Initialise RAM
@@ -1826,7 +1823,7 @@ static void bbc_io_init ( BBCMicro *bbc ) {
 						BBC_SHEILA_SYSTEM_VIA_SIZE,
 						"system_via",
 						bbc->irq[BBC_IRQ_SYSTEM_VIA],
-						bbc_dip );
+						bbc->dip );
 
 	/* Initialise user VIA */
 	bbc->user_via = bbc_user_via_init ( BBC_SHEILA_USER_VIA_BASE,
@@ -1865,26 +1862,19 @@ static void bbc_display_init ( BBCMicro *bbc ) {
 				  bbc->system_via );
 }
 
-/** BBC Micro state description */
-static const VMStateDescription vmstate_bbc = {
-	.name = "bbc",
-	.version_id = 1,
-	.minimum_version_id = 1,
-	.fields = ( VMStateField[] ) {
-		VMSTATE_END_OF_LIST()
-	},
-};
-
 /**
  * Initialise BBC Model B
  *
  * @v args		Machine arguments
  */
 static void bbcb_init ( QEMUMachineInitArgs *args ) {
-	BBCMicro *bbc = g_new0 ( BBCMicro, 1 );
+	DeviceState *qdev;
+	BBCMicro *bbc;
 
 	/* Initialise machine */
-	bbc->name = "bbcb";
+	qdev = qdev_create ( NULL, "bbc" );
+	bbc = DO_UPCAST ( BBCMicro, qdev, qdev );
+	qdev_init_nofail ( qdev );
 
 	/* Initialise RAM */
 	bbc_ram_init ( bbc, BBC_B_RAM_SIZE );
@@ -1903,9 +1893,6 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 
 	/* Initialise display */
 	bbc_display_init ( bbc );
-
-	/* Register virtual machine state */
-	vmstate_register ( NULL, 0, &vmstate_bbc, bbc );
 }
 
 /** BBC Model B */
@@ -1924,3 +1911,55 @@ static void bbc_machine_init ( void ) {
 }
 
 machine_init ( bbc_machine_init );
+
+/******************************************************************************
+ *
+ * Machine properties
+ *
+ */
+
+/** QEMU device initialiser */
+static int bbc_qdev_init ( DeviceState *qdev ) {
+	return 0;
+}
+
+/** BBC Micro state description */
+static const VMStateDescription vmstate_bbc = {
+	.name = "bbc",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_END_OF_LIST()
+	},
+};
+
+/** Properties */
+static Property bbc_properties[] = {
+	DEFINE_PROP_UINT8 ( "dip", BBCMicro, dip, 0 ),
+	DEFINE_PROP_END_OF_LIST(),
+};
+
+/** Class initialiser */
+static void bbc_class_init ( ObjectClass *class, void *data ) {
+	DeviceClass *dc = DEVICE_CLASS ( class );
+
+	dc->init = bbc_qdev_init;
+	dc->vmsd = &vmstate_bbc;
+	dc->props = bbc_properties;
+}
+
+/** Type information */
+static TypeInfo bbc_info = {
+	.name = "bbc",
+	.parent = TYPE_DEVICE,
+	.instance_size = sizeof ( BBCMicro ),
+	.class_init = bbc_class_init,
+};
+
+/** Type registrar */
+static void bbc_register_types ( void ) {
+	type_register_static ( &bbc_info );
+}
+
+/** Type initialiser */
+type_init ( bbc_register_types );

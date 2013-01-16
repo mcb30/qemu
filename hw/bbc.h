@@ -335,8 +335,8 @@ enum bbc_nmi_sources {
  * BBC micro
  */
 typedef struct {
-	/** Name */
-	const char *name;
+	/** QEMU device */
+	DeviceState qdev;
 	/** CPU */
 	CPUM6502State *cpu;
 	/** RAM */
@@ -353,6 +353,8 @@ typedef struct {
 	qemu_irq *nmi;
 	/** Non-maskable interrupt status */
 	bool nmi_active[BBC_NMI_COUNT];
+	/** DIP switches */
+	uint8_t dip;
 	/** FRED */
 	BBCUnimplemented *fred;
 	/** JIM */
