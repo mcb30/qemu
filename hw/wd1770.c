@@ -32,6 +32,9 @@
 		}							\
 	} while ( 0 )
 
+/** A WD1770 command handler */
+typedef void ( * wd1770_command_handler ) ( WD1770FDC *fdc );
+
 /**
  * Get device name for log messages
  *
@@ -74,15 +77,25 @@ void wd1770_reset ( WD1770FDC *fdc ) {
 
 	LOG_WD1770 ( "%s: reset\n", wd1770_name ( fdc ) );
 
-	/* Abort current command */
+	/* Reset registers */
 	fdc->command = 0;
-
-	/* Reset track and sector registers */
+	fdc->status = 0;
 	fdc->track = 0;
 	fdc->sector = 0;
+	fdc->data = 0;
+	fdc->step = +1;
+}
 
-	/* Switch off motor */
-	fdc->motor = false;
+/**
+ * Turn off motor
+ *
+ * @v opaque		1770 FDC
+ */
+static void wd1770_motor_off ( void *opaque ) {
+	WD1770FDC *fdc = opaque;
+
+	/* Turn off motor */
+	fdc->status &= ~WD1770_STAT_MOTOR_ON;
 }
 
 /**
@@ -142,17 +155,256 @@ void wd1770_set_single_density ( WD1770FDC *fdc, bool single_density ) {
 }
 
 /**
+ * Complete operation
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_done ( WD1770FDC *fdc ) {
+	int64_t motor_off_time_ms;
+
+	/* Clear busy flag */
+	fdc->status &= ~WD1770_STAT_BUSY;
+
+	/* Start timer to switch off motor (if currently on) */
+	if ( fdc->status & WD1770_STAT_MOTOR_ON ) {
+		motor_off_time_ms = ( qemu_get_clock_ms ( vm_clock ) +
+				      WD1770_MOTOR_OFF_DELAY_MS );
+		qemu_mod_timer ( fdc->motor_off, motor_off_time_ms );
+	}
+
+	/* Assert completion interrupt */
+	qemu_irq_raise ( fdc->intrq );
+}
+
+/**
+ * Seek to a new track
+ *
+ * @v fdc		1770 FDC
+ * @v track_phys_delta	Amount by which to move the physical drive head
+ * @v track_reg_delta	Amount by which to change the track register
+ */
+static void wd1770_seek ( WD1770FDC *fdc, int track_phys_delta,
+			  int track_reg_delta ) {
+	WD1770FDD *fdd = wd1770_fdd ( fdc );
+	int new_track_phys;
+
+	/* Switch on motor if instructed to do so */
+	if ( ! ( fdc->command & WD1770_CMD_DISABLE_SPIN_UP ) )
+		fdc->status |= WD1770_STAT_MOTOR_ON;
+
+	/* Calculate new physical track, limited to maximum track
+	 * supported by the drive (not the disk).
+	 */
+	if ( fdd ) {
+		new_track_phys = ( fdd->track + track_phys_delta );
+		if ( new_track_phys < 0 )
+			new_track_phys = 0;
+		if ( new_track_phys > WD1770_MAX_TRACK )
+			new_track_phys = WD1770_MAX_TRACK;
+		fdd->track = new_track_phys;
+	}
+
+	/* Calculate new track register content */
+	fdc->track += track_reg_delta;
+	LOG_WD1770 ( "%s: now on track %d (register %d)\n", wd1770_name ( fdc ),
+		     ( fdd ? fdd->track : -1 ), fdc->track );
+
+	/* Indicate whether or not physical head is on track 0 */
+	if ( ( ! fdd ) || ( fdd->track != 0 ) )
+		fdc->status |= WD1770_STAT_NOT_TR00;
+
+	/* Fail if asked to verify track presence and track does not
+	 * exist or does not match the track register.
+	 */
+	if ( ( fdc->command & WD1770_CMD_VERIFY ) &&
+	     ( ( ! fdd ) ||
+	       ( fdd->track >= fdd->track_count ) ||
+	       ( fdd->track != fdc->track ) ) ) {
+		LOG_WD1770 ( "%s: failed: track %d not present\n",
+			     wd1770_name ( fdc ), fdc->track );
+		fdc->status |= WD1770_STAT_NOT_FOUND;
+		wd1770_done ( fdc );
+		return;
+	}
+
+	/* Succeed */
+	wd1770_done ( fdc );
+}
+
+/**
+ * Restore head to track zero
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_command_restore ( WD1770FDC *fdc ) {
+
+	LOG_WD1770 ( "%s: (0x%02x) restore to track 0\n", wd1770_name ( fdc ),
+		     fdc->command );
+	wd1770_seek ( fdc, -WD1770_MAX_TRACK, -(fdc->track) );
+}
+
+/**
+ * Seek to specified track
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_command_seek ( WD1770FDC *fdc ) {
+	int delta;
+
+	LOG_WD1770 ( "%s: (0x%02x) seek from track %d to track %d\n",
+		     wd1770_name ( fdc ), fdc->command, fdc->track, fdc->data );
+	delta = ( fdc->data - fdc->track );
+	wd1770_seek ( fdc, delta, delta );
+}
+
+/**
+ * Step one track in same direction as previous step
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_command_step ( WD1770FDC *fdc ) {
+
+	LOG_WD1770 ( "%s: (0x%02x) step\n", wd1770_name ( fdc ), fdc->command );
+	wd1770_seek ( fdc, fdc->step,
+		      ( ( fdc->command & WD1770_CMD_UPDATE_TRACK ) ?
+			fdc->step : 0 ) );
+}
+
+/**
+ * Step one track inwards
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_command_step_in ( WD1770FDC *fdc ) {
+
+	LOG_WD1770 ( "%s: (0x%02x) step inwards\n", wd1770_name ( fdc ),
+		     fdc->command );
+	fdc->step = +1;
+	wd1770_seek ( fdc, fdc->step,
+		      ( ( fdc->command & WD1770_CMD_UPDATE_TRACK ) ?
+			fdc->step : 0 ) );
+}
+
+/**
+ * Step one track outwards
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_command_step_out ( WD1770FDC *fdc ) {
+
+	LOG_WD1770 ( "%s: (0x%02x), step outwards\n", wd1770_name ( fdc ),
+		     fdc->command );
+	fdc->step = -1;
+	wd1770_seek ( fdc, fdc->step,
+		      ( ( fdc->command & WD1770_CMD_UPDATE_TRACK ) ?
+			fdc->step : 0 ) );
+}
+
+/**
+ * Read sector(s)
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_command_read_sector ( WD1770FDC *fdc ) {
+
+	LOG_WD1770 ( "%s: (0x%02x) read\n", wd1770_name ( fdc ), fdc->command );
+}
+
+/**
+ * Write sector(s)
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_command_write_sector ( WD1770FDC *fdc ) {
+
+	LOG_WD1770 ( "%s: (0x%02x) write\n", wd1770_name ( fdc ),
+		     fdc->command );
+}
+
+/**
+ * Read address
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_command_read_address ( WD1770FDC *fdc ) {
+
+	LOG_WD1770 ( "%s: (0x%02x) read address\n", wd1770_name ( fdc ),
+		     fdc->command );
+}
+
+/**
+ * Read track
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_command_read_track ( WD1770FDC *fdc ) {
+
+	LOG_WD1770 ( "%s: (0x%02x) read track\n", wd1770_name ( fdc ),
+		     fdc->command );
+}
+
+/**
+ * Write track
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_command_write_track ( WD1770FDC *fdc ) {
+
+	LOG_WD1770 ( "%s: (0x%02x) write track\n", wd1770_name ( fdc ),
+		     fdc->command );
+}
+
+/**
+ * Force interrupt
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_command_force_interrupt ( WD1770FDC *fdc ) {
+
+	LOG_WD1770 ( "%s: (0x%02x) force interrupt\n", wd1770_name ( fdc ),
+		     fdc->command );
+}
+
+/**
  * Handle issued command
  *
  * @v fdc		1770 FDC
  * @v command		Command
  */
 static void wd1770_command_write ( WD1770FDC *fdc, uint8_t command ) {
+	static const wd1770_command_handler handlers[16] = {
+		wd1770_command_restore,		wd1770_command_seek,
+		wd1770_command_step,		wd1770_command_step,
+		wd1770_command_step_in,		wd1770_command_step_in,
+		wd1770_command_step_out,	wd1770_command_step_out,
+		wd1770_command_read_sector,	wd1770_command_read_sector,
+		wd1770_command_write_sector,	wd1770_command_write_sector,
+		wd1770_command_read_address,	wd1770_command_read_track,
+		wd1770_command_write_track,	wd1770_command_force_interrupt,
+	};
+	wd1770_command_handler handler = handlers[ command >> 4 ];
 
-	LOG_WD1770 ( "%s: command 0x%02x\n", wd1770_name ( fdc ), command );
+	/* If drive is busy and command is not "force interrupt", then
+	 * ignore the command.
+	 */
+	if ( ( fdc->status & WD1770_STAT_BUSY ) &&
+	     ( handler != wd1770_command_force_interrupt ) ) {
+		LOG_WD1770 ( "%s: (0x%02x) command ignored while busy\n",
+			     wd1770_name ( fdc ), command );
+		return;
+	}
 
 	/* Record command */
 	fdc->command = command;
+
+	/* Clear all bits in status register apart from motor status */
+	fdc->status &= WD1770_STAT_MOTOR_ON;
+
+	/* Clear completion interrupt */
+	qemu_irq_lower ( fdc->intrq );
+
+	/* Hand off to individual command handler */
+	handler ( fdc );
 }
 
 /**
@@ -164,9 +416,11 @@ static void wd1770_command_write ( WD1770FDC *fdc, uint8_t command ) {
 static uint8_t wd1770_status_read ( WD1770FDC *fdc ) {
 	uint8_t data;
 
-	data = ( ( fdc->motor ? WD1770_STAT_MOTOR_ON : 0 ) |
-		 0 );
-		 
+	/* Read status register */
+	data = fdc->status;
+
+	/* Clear completion interrupt */
+	qemu_irq_lower ( fdc->intrq );
 
 	return data;
 }
@@ -193,8 +447,6 @@ static uint8_t wd1770_track_read ( WD1770FDC *fdc ) {
  * @v data		Data
  */
 static void wd1770_track_write ( WD1770FDC *fdc, uint8_t data ) {
-
-	LOG_WD1770 ( "%s: track=%d\n", wd1770_name ( fdc ), data );
 
 	/* Write track register */
 	fdc->track = data;
@@ -223,10 +475,35 @@ static uint8_t wd1770_sector_read ( WD1770FDC *fdc ) {
  */
 static void wd1770_sector_write ( WD1770FDC *fdc, uint8_t data ) {
 
-	LOG_WD1770 ( "%s: sector=%d\n", wd1770_name ( fdc ), data );
-
 	/* Write sector register */
 	fdc->sector = data;
+}
+
+/**
+ * Read from 1770 FDC data register
+ *
+ * @v fdc		1770 FDC
+ * @ret data		Data
+ */
+static uint8_t wd1770_data_read ( WD1770FDC *fdc ) {
+	uint8_t data;
+
+	/* Read data register */
+	data = fdc->data;
+
+	return data;
+}
+
+/**
+ * Write to 1770 FDC data register
+ *
+ * @v fdc		1770 FDC
+ * @v data		Data
+ */
+static void wd1770_data_write ( WD1770FDC *fdc, uint8_t data ) {
+
+	/* Write data register */
+	fdc->data = data;
 }
 
 /**
@@ -251,6 +528,9 @@ static uint64_t wd1770_read ( void *opaque, hwaddr addr, unsigned int size ) {
 		break;
 	case WD1770_SECTOR:
 		data = wd1770_sector_read ( fdc );
+		break;
+	case WD1770_DATA:
+		data = wd1770_data_read ( fdc );
 		break;
 	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from "
@@ -285,6 +565,9 @@ static void wd1770_write ( void *opaque, hwaddr addr, uint64_t data64,
 	case WD1770_SECTOR:
 		wd1770_sector_write ( fdc, data );
 		break;
+	case WD1770_DATA:
+		wd1770_data_write ( fdc, data );
+		break;
 	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to "
 				"0x%02lx\n", wd1770_name ( fdc ), data, addr );
@@ -309,6 +592,7 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 
 	/* Initialise FDC */
 	fdc->buf = qemu_memalign ( BDRV_SECTOR_SIZE, WD1770_MAX_SECTOR_SIZE );
+	fdc->motor_off = qemu_new_timer_ms ( vm_clock, wd1770_motor_off, fdc );
 
 	/* Initialise drives */
 	for ( i = 0 ; i < ARRAY_SIZE ( fdc->fdds ) ; i++ ) {
@@ -323,6 +607,9 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 	/* Initialise interrupts */
 	sysbus_init_irq ( busdev, &fdc->drq );
 	sysbus_init_irq ( busdev, &fdc->intrq );
+
+	/* Reset device */
+	wd1770_reset ( fdc );
 
 	return 0;
 }
@@ -380,10 +667,12 @@ static const VMStateDescription vmstate_wd1770 = {
 		VMSTATE_INT8 ( drive, WD1770FDC ),
 		VMSTATE_UINT8 ( side, WD1770FDC ),
 		VMSTATE_BOOL ( single_density, WD1770FDC ),
+		VMSTATE_UINT8 ( command, WD1770FDC ),
+		VMSTATE_UINT8 ( status, WD1770FDC ),
 		VMSTATE_UINT8 ( track, WD1770FDC ),
 		VMSTATE_UINT8 ( sector, WD1770FDC ),
-		VMSTATE_UINT8 ( command, WD1770FDC ),
-		VMSTATE_BOOL ( motor, WD1770FDC ),
+		VMSTATE_UINT8 ( data, WD1770FDC ),
+		VMSTATE_INT8 ( step, WD1770FDC ),
 		VMSTATE_END_OF_LIST()
 	},
 };

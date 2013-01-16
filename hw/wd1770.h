@@ -36,8 +36,10 @@ typedef struct {
 	WD1770FDC *fdc;
 	/** Block device */
 	BlockDriverState *block;
+	/** Number of tracks on this block device */
+	uint8_t track_count;
 
-	/** Current track position */
+	/** Current track position (may exceed limit of block device) */
 	uint8_t track;
 } WD1770FDD;
 
@@ -53,8 +55,10 @@ struct WD1770FDC {
 	qemu_irq intrq;
 	/** Attached drives */
 	WD1770FDD fdds[WD1770_DRIVE_COUNT];
-	/** Data buffer */
+	/** Sector buffer */
 	uint8_t *buf;
+	/** Motor switch-off timer */
+	QEMUTimer *motor_off;
 
 	/** Selected drive (negative for no drive) */
 	int8_t drive;
@@ -62,14 +66,18 @@ struct WD1770FDC {
 	uint8_t side;
 	/** Selected density */
 	bool single_density;
+	/** Command register */
+	uint8_t command;
+	/** Status register */
+	uint8_t status;
 	/** Track register (may not match actual track position) */
 	uint8_t track;
 	/** Sector register */
 	uint8_t sector;
-	/** Most recently-issued command */
-	uint8_t command;
-	/** Motor is on */
-	bool motor;
+	/** Data register */
+	uint8_t data;
+	/** Step direction */
+	int8_t step;
 };
 
 /** Size of memory region */
@@ -83,17 +91,27 @@ struct WD1770FDC {
 #define WD1770_DATA 0x03
 
 /* Command register */
+#define WD1770_CMD_VERIFY 0x04
+#define WD1770_CMD_DISABLE_SPIN_UP 0x08
+#define WD1770_CMD_UPDATE_TRACK 0x10
 
 /* Status register */
 #define WD1770_STAT_BUSY 0x01
+#define WD1770_STAT_INDEX 0x02
 #define WD1770_STAT_DRQ 0x02
+#define WD1770_STAT_NOT_TR00 0x04
 #define WD1770_STAT_LOST 0x04
+#define WD1770_STAT_CRC_ERROR 0x08
+#define WD1770_STAT_NOT_FOUND 0x10
+#define WD1770_STAT_SPUN_UP 0x20
+#define WD1770_STAT_DELETED_DATA 0x20
+#define WD1770_STAT_PROTECTED 0x40
 #define WD1770_STAT_MOTOR_ON 0x80
 
-/* Drive number to use when no drive is selected */
+/** Drive number to use when no drive is selected */
 #define WD1770_NO_DRIVE -1
 
-/* Assumed maximum track number
+/** Assumed maximum track number
  *
  * This is a property of the physical drive, rather than the
  * controller.  It is independent of the maximum track present on the
@@ -102,6 +120,12 @@ struct WD1770FDC {
  * track number for physical drives.
  */
 #define WD1770_MAX_TRACK 83
+
+/** Motor switch-off delay in milliseconds
+ *
+ * The datasheet specifies 9 revolutions at 300rpm => 1800ms
+ */
+#define WD1770_MOTOR_OFF_DELAY_MS 1800
 
 extern void wd1770_reset ( WD1770FDC *fdc );
 extern void wd1770_set_drive ( WD1770FDC *fdc, int drive );
