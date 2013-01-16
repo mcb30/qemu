@@ -26,20 +26,22 @@
 #define DEBUG_WD1770 1
 
 /* Debug messages */
-#define DBG_WD1770( fdc, fmt, ... ) do {				\
-	if ( DEBUG_WD1770 ) {						\
-		qemu_log_mask ( CPU_LOG_IOPORT, "%s: " fmt,		\
-				qdev_fw_name ( &(fdc)->busdev.qdev ),	\
-				##__VA_ARGS__ );			\
-	}								\
+#define LOG_WD1770( ... ) do {						\
+		if ( DEBUG_WD1770 ) {					\
+			qemu_log_mask ( CPU_LOG_IOPORT, __VA_ARGS__ );	\
+		}							\
 	} while ( 0 )
 
-/* Unimplemented functionality messages */
-#define LOG_WD1770_UNIMP( fdc, fmt, ... ) do {				\
-	qemu_log_mask ( LOG_UNIMP, "%s: " fmt,				\
-			qdev_fw_name ( &(fdc)->busdev.qdev ),		\
-			##__VA_ARGS__ );				\
-	} while ( 0 )
+/**
+ * Get device name for log messages
+ *
+ * @v fdc		1770 FDC
+ * @ret name		Device name
+ */
+static inline const char * wd1770_name ( WD1770FDC *fdc ) {
+
+	return qdev_fw_name ( &fdc->busdev.qdev );
+}
 
 /**
  * Get currently selected drive
@@ -70,7 +72,7 @@ static WD1770FDD * wd1770_fdd ( WD1770FDC *fdc ) {
  */
 void wd1770_reset ( WD1770FDC *fdc ) {
 
-	DBG_WD1770 ( fdc, "Reset\n" );
+	LOG_WD1770 ( "%s: reset\n", wd1770_name ( fdc ) );
 
 	/* Abort current command */
 	fdc->command = 0;
@@ -98,7 +100,7 @@ void wd1770_set_drive ( WD1770FDC *fdc, int drive ) {
 	/* Record drive */
 	fdc->drive = drive;
 	fdd = wd1770_fdd ( fdc );
-	DBG_WD1770 ( fdc, "DRIVE=%d (%s)\n", drive,
+	LOG_WD1770 ( "%s: drive=%d (%s)\n", wd1770_name ( fdc ), drive,
 		     ( ( drive < 0 ) ? "<unselected>" :
 		       ( fdd ? bdrv_get_device_name ( fdd->block ) :
 			 "<missing>" ) ) );
@@ -115,7 +117,7 @@ void wd1770_set_drive ( WD1770FDC *fdc, int drive ) {
  */
 void wd1770_set_side ( WD1770FDC *fdc, unsigned int side ) {
 
-	DBG_WD1770 ( fdc, "SIDE=%d\n", side );
+	LOG_WD1770 ( "%s: side=%d\n", wd1770_name ( fdc ), side );
 
 	/* Record side */
 	fdc->side = side;
@@ -132,8 +134,8 @@ void wd1770_set_side ( WD1770FDC *fdc, unsigned int side ) {
  */
 void wd1770_set_single_density ( WD1770FDC *fdc, bool single_density ) {
 
-	DBG_WD1770 ( fdc, "DENSITY=%s\n",
-		     ( single_density ? "SINGLE" : "DOUBLE" ) );
+	LOG_WD1770 ( "%s: density=%s\n", wd1770_name ( fdc ),
+		     ( single_density ? "single" : "double" ) );
 
 	/* Record side */
 	fdc->single_density = single_density;
@@ -147,7 +149,7 @@ void wd1770_set_single_density ( WD1770FDC *fdc, bool single_density ) {
  */
 static void wd1770_command_write ( WD1770FDC *fdc, uint8_t command ) {
 
-	
+	LOG_WD1770 ( "%s: command 0x%02x\n", wd1770_name ( fdc ), command );
 
 	/* Record command */
 	fdc->command = command;
@@ -192,7 +194,7 @@ static uint8_t wd1770_track_read ( WD1770FDC *fdc ) {
  */
 static void wd1770_track_write ( WD1770FDC *fdc, uint8_t data ) {
 
-	DBG_WD1770 ( fdc, "TRACK=%d\n", data );
+	LOG_WD1770 ( "%s: track=%d\n", wd1770_name ( fdc ), data );
 
 	/* Write track register */
 	fdc->track = data;
@@ -221,7 +223,7 @@ static uint8_t wd1770_sector_read ( WD1770FDC *fdc ) {
  */
 static void wd1770_sector_write ( WD1770FDC *fdc, uint8_t data ) {
 
-	DBG_WD1770 ( fdc, "SECTOR=%d\n", data );
+	LOG_WD1770 ( "%s: sector=%d\n", wd1770_name ( fdc ), data );
 
 	/* Write sector register */
 	fdc->sector = data;
@@ -251,8 +253,8 @@ static uint64_t wd1770_read ( void *opaque, hwaddr addr, unsigned int size ) {
 		data = wd1770_sector_read ( fdc );
 		break;
 	default:
-		LOG_WD1770_UNIMP ( fdc, "unimplemented read from "
-				   "0x%02lx\n", addr );
+		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from "
+				"0x%02lx\n", wd1770_name ( fdc ), addr );
 		data = 0xff;
 		break;
 	}
@@ -284,8 +286,8 @@ static void wd1770_write ( void *opaque, hwaddr addr, uint64_t data64,
 		wd1770_sector_write ( fdc, data );
 		break;
 	default:
-		LOG_WD1770_UNIMP ( fdc, "unimplemented write 0x%02x to "
-				   "0x%02lx\n", data, addr );
+		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to "
+				"0x%02lx\n", wd1770_name ( fdc ), data, addr );
 		break;
 	}
 }
@@ -306,6 +308,9 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 	unsigned int i;
 
 	/* Initialise FDC */
+	fdc->buf = qemu_memalign ( BDRV_SECTOR_SIZE, WD1770_MAX_SECTOR_SIZE );
+
+	/* Initialise drives */
 	for ( i = 0 ; i < ARRAY_SIZE ( fdc->fdds ) ; i++ ) {
 		fdc->fdds[i].fdc = fdc;
 	}

@@ -27,6 +27,9 @@ typedef struct WD1770FDC WD1770FDC;
 /** Number of drives */
 #define WD1770_DRIVE_COUNT 2
 
+/** Maximum sector size */
+#define WD1770_MAX_SECTOR_SIZE 1024
+
 /** 1770 FDC drive */
 typedef struct {
 	/** Controller */
@@ -50,6 +53,8 @@ struct WD1770FDC {
 	qemu_irq intrq;
 	/** Attached drives */
 	WD1770FDD fdds[WD1770_DRIVE_COUNT];
+	/** Data buffer */
+	uint8_t *buf;
 
 	/** Selected drive (negative for no drive) */
 	int8_t drive;

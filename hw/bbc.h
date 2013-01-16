@@ -25,19 +25,21 @@
 #include "m6522.h"
 #include "wd1770.h"
 
-#define BBC_B_RAM_BASE 0x0000
 #define BBC_B_RAM_SIZE 0x8000
+#define BBC_B_MOS_FILENAME "bbc/OS12.ROM"
+#define BBC_B_BASIC_FILENAME "bbc/BASIC2.ROM"
+#define BBC_B_DEFAULT_CPU_MODEL "6502"
+
+#define BBC_MOS_BASE 0xc000
+#define BBC_MOS_SIZE 0x4000
+#define BBC_MOS_LOW_SIZE ( 0xfbff - 0xc000 + 1 )
+#define BBC_MOS_HIGH_SIZE ( 0xffff - 0xff00 + 1 )
+#define BBC_MOS_VIRTUAL_BASE 0x20000
 
 #define BBC_PAGED_ROM_COUNT 16
 #define BBC_PAGED_ROM_BASE 0x8000
 #define BBC_PAGED_ROM_SIZE 0x4000
 #define BBC_PAGED_ROM_VIRTUAL_BASE 0x40000
-
-#define BBC_B_MOS_FILENAME "bbc/OS12.ROM"
-#define BBC_B_MOS_BASE 0xc000
-#define BBC_B_MOS_SIZE 0x4000
-
-#define BBC_B_BASIC_FILENAME "bbc/BASIC2.ROM"
 
 /* FRED */
 #define BBC_FRED_BASE 0xfc00
@@ -50,27 +52,30 @@
 /* SHEILA */
 #define BBC_SHEILA_BASE 0xfe00
 #define BBC_SHEILA_SIZE 0x0100
-#define BBC_SHEILA_CRTC_BASE 0x00
-#define BBC_SHEILA_CRTC_SIZE 0x08
-#define BBC_SHEILA_ACIA_BASE 0x08
-#define BBC_SHEILA_ACIA_SIZE 0x08
-#define BBC_SHEILA_VIDEO_ULA_BASE 0x20
-#define BBC_SHEILA_VIDEO_ULA_SIZE 0x10
-#define BBC_SHEILA_PAGED_ROM_SELECT_BASE 0x30
-#define BBC_SHEILA_PAGED_ROM_SELECT_SIZE 0x10
-#define BBC_SHEILA_SYSTEM_VIA_BASE 0x40
-#define BBC_SHEILA_SYSTEM_VIA_SIZE 0x10
-#define BBC_SHEILA_USER_VIA_BASE 0x60
-#define BBC_SHEILA_USER_VIA_SIZE 0x10
-#define BBC_SHEILA_FDC_BASE 0x80
-#define BBC_SHEILA_FDC_SIZE 0x20
-#define BBC_SHEILA_ADC_BASE 0xc0
-#define BBC_SHEILA_ADC_SIZE 0x20
+#define BBC_SHEILA_CRTC_BASE 0xfe00
+#define BBC_SHEILA_CRTC_SIZE 0x0008
+#define BBC_SHEILA_ACIA_BASE 0xfe08
+#define BBC_SHEILA_ACIA_SIZE 0x0008
+#define BBC_SHEILA_VIDEO_ULA_BASE 0xfe20
+#define BBC_SHEILA_VIDEO_ULA_SIZE 0x0010
+#define BBC_SHEILA_PAGED_ROM_SELECT_BASE 0xfe30
+#define BBC_SHEILA_PAGED_ROM_SELECT_SIZE 0x0010
+#define BBC_SHEILA_SYSTEM_VIA_BASE 0xfe40
+#define BBC_SHEILA_SYSTEM_VIA_SIZE 0x0010
+#define BBC_SHEILA_USER_VIA_BASE 0xfe60
+#define BBC_SHEILA_USER_VIA_SIZE 0x0010
+#define BBC_SHEILA_FDC_BASE 0xfe80
+#define BBC_SHEILA_FDC_SIZE 0x0020
+#define BBC_SHEILA_ADC_BASE 0xfec0
+#define BBC_SHEILA_ADC_SIZE 0x0020
 
 /* Video ULA */
 #define BBC_VIDEO_ULA_SIZE 0x02
 #define BBC_VIDEO_ULA_CONTROL 0x00
 #define BBC_VIDEO_ULA_PALETTE 0x01
+
+/* Paged ROM */
+#define BBC_PAGED_ROM_SELECT_SIZE 0x01
 
 /* Addressable latch */
 #define BBC_LATCH_SOUND_WE 0
@@ -115,6 +120,57 @@
 /** System clock runs at 1MHz */
 #define BBC_1MHZ_TICK_NS 1000
 
+/**
+ * BBC ROM
+ */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Memory region */
+	MemoryRegion mr;
+} BBCROM;
+
+/**
+ * MOS ROM
+ */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Raw image memory region */
+	MemoryRegion raw;
+	/** Low section of MOS (below FRED) */
+	MemoryRegion low;
+	/** High section of MOS (above SHEILA) */
+	MemoryRegion high;
+	/** Address */
+	hwaddr addr;
+	/** Size */
+	uint64_t size;
+} BBCMOS;
+
+/**
+ * Paged ROM
+ */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Paged ROM memory region */
+	MemoryRegion rom;
+	/** Paged ROM bank memory region */
+	MemoryRegion roms;
+	/** Paged ROM select register memory region */
+	MemoryRegion select;
+	/** Base address for ROM images */
+	hwaddr roms_addr;
+	/** Paged ROM size */
+	uint64_t size;
+	/** Number of paged ROMs */
+	unsigned int count;
+
+	/** Paged ROM select register */
+	uint8_t page;
+} BBCPagedROM;
+
 typedef struct BBCVideoULAUpdateEntry BBCVideoULAUpdateEntry;
 
 /**
@@ -154,29 +210,6 @@ struct BBCVideoULAUpdateEntry {
 	/** Next entry */
 	QTAILQ_ENTRY ( BBCVideoULAUpdateEntry ) next;
 };
-
-/**
- * Paged ROM
- */
-typedef struct {
-	/** Name */
-	const char *name;
-	/** Paged ROM memory region */
-	MemoryRegion rom;
-	/** Paged ROM bank memory region */
-	MemoryRegion roms;
-	/** Paged ROM select register memory region */
-	MemoryRegion select;
-	/** Base target physical address */
-	hwaddr targphys;
-	/** Paged ROM size */
-	hwaddr size;
-	/** Number of paged ROMs */
-	unsigned int count;
-
-	/** Paged ROM select register */
-	uint8_t page;
-} BBCPagedROM;
 
 /**
  * System VIA
@@ -238,70 +271,14 @@ typedef struct {
 } BBCADC;
 
 /**
- * Unimplemented memory region
- */
-typedef struct {
-	/** Name */
-	const char *name;
-} BBCUnimplementedMemoryRegion;
-
-/**
- * FRED
- */
-typedef struct {
-	/** Memory region */
-	MemoryRegion mr;
-	/** Unimplemented memory region */
-	BBCUnimplementedMemoryRegion unimp;	
-} BBCFRED;
-
-/**
- * JIM
- */
-typedef struct {
-	/** Memory region */
-	MemoryRegion mr;
-	/** Unimplemented memory region */
-	BBCUnimplementedMemoryRegion unimp;	
-} BBCJIM;
-
-/**
- * SHEILA
+ * Unimplemented I/O region
  */
 typedef struct {
 	/** Name */
 	const char *name;
 	/** Memory region */
 	MemoryRegion mr;
-	/** Unimplemented memory region */
-	BBCUnimplementedMemoryRegion unimp;
-	/** CRTC */
-	MC6845CRTC *crtc;
-	/** ACIA */
-	MC6850ACIA *acia;
-	/** Video ULA */
-	BBCVideoULA *video_ula;
-	/** Paged ROM */
-	BBCPagedROM *paged;
-	/** System VIA */
-	BBCSystemVIA *system_via;
-	/** User VIA */
-	BBCUserVIA *user_via;
-	/** Floppy disc controller */
-	BBC1770FDC *fdc;
-	/** Analogue to digital converter */
-	BBCADC *adc;
-} BBCSHEILA;
-
-/**
- * BBC ROM
- */
-typedef struct {
-	/** Name */
-	const char *name;
-	/** Memory region */
-	MemoryRegion mr;
-} BBCROM;
+} BBCUnimplemented;
 
 #include "bbc_crt.h"
 
@@ -320,7 +297,7 @@ enum bbc_nmi_sources {
 };
 
 /**
- * BBC Micro
+ * BBC micro
  */
 typedef struct {
 	/** Name */
@@ -330,7 +307,7 @@ typedef struct {
 	/** RAM */
 	MemoryRegion ram;
 	/** MOS ROM */
-	BBCROM *mos;
+	BBCMOS *mos;
 	/** Paged ROM */
 	BBCPagedROM *paged;
 	/** Maskable interrupts */
@@ -342,11 +319,23 @@ typedef struct {
 	/** Non-maskable interrupt status */
 	bool nmi_active[BBC_NMI_COUNT];
 	/** FRED */
-	BBCFRED *fred;
+	BBCUnimplemented *fred;
 	/** JIM */
-	BBCJIM *jim;
-	/** SHEILA */
-	BBCSHEILA *sheila;
+	BBCUnimplemented *jim;
+	/** CRTC */
+	MC6845CRTC *crtc;
+	/** ACIA */
+	MC6850ACIA *acia;
+	/** Video ULA */
+	BBCVideoULA *video_ula;
+	/** System VIA */
+	BBCSystemVIA *system_via;
+	/** User VIA */
+	BBCUserVIA *user_via;
+	/** Floppy disc controller */
+	BBC1770FDC *fdc;
+	/** Analogue to digital converter */
+	BBCADC *adc;
 	/** Display */
 	BBCDisplay *crt;
 } BBCMicro;
