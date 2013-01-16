@@ -50,24 +50,28 @@
 #define BBC_JIM_SIZE 0x0100
 
 /* SHEILA */
-#define BBC_SHEILA_BASE 0xfe00
-#define BBC_SHEILA_SIZE 0x0100
 #define BBC_SHEILA_CRTC_BASE 0xfe00
 #define BBC_SHEILA_CRTC_SIZE 0x0008
 #define BBC_SHEILA_ACIA_BASE 0xfe08
 #define BBC_SHEILA_ACIA_SIZE 0x0008
+#define BBC_SHEILA_SERIAL_ULA_BASE 0xfe10
+#define BBC_SHEILA_SERIAL_ULA_SIZE 0x0010
 #define BBC_SHEILA_VIDEO_ULA_BASE 0xfe20
 #define BBC_SHEILA_VIDEO_ULA_SIZE 0x0010
 #define BBC_SHEILA_PAGED_ROM_SELECT_BASE 0xfe30
 #define BBC_SHEILA_PAGED_ROM_SELECT_SIZE 0x0010
 #define BBC_SHEILA_SYSTEM_VIA_BASE 0xfe40
-#define BBC_SHEILA_SYSTEM_VIA_SIZE 0x0010
+#define BBC_SHEILA_SYSTEM_VIA_SIZE 0x0020
 #define BBC_SHEILA_USER_VIA_BASE 0xfe60
-#define BBC_SHEILA_USER_VIA_SIZE 0x0010
+#define BBC_SHEILA_USER_VIA_SIZE 0x0020
 #define BBC_SHEILA_FDC_BASE 0xfe80
 #define BBC_SHEILA_FDC_SIZE 0x0020
+#define BBC_SHEILA_ECONET_BASE 0xfea0
+#define BBC_SHEILA_ECONET_SIZE 0x0020
 #define BBC_SHEILA_ADC_BASE 0xfec0
 #define BBC_SHEILA_ADC_SIZE 0x0020
+#define BBC_SHEILA_TUBE_BASE 0xfee0
+#define BBC_SHEILA_TUBE_SIZE 0x0020
 
 /* Video ULA */
 #define BBC_VIDEO_ULA_SIZE 0x02
@@ -120,6 +124,16 @@
 
 /** System clock runs at 1MHz */
 #define BBC_1MHZ_TICK_NS 1000
+
+/**
+ * Unimplemented I/O region
+ */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Memory region */
+	MemoryRegion mr;
+} BBCUnimplemented;
 
 /**
  * BBC ROM
@@ -213,6 +227,16 @@ struct BBCVideoULAUpdateEntry {
 };
 
 /**
+ * Serial ULA
+ */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Unimplemented I/O region */
+	BBCUnimplemented *unimp;
+} BBCSerialULA;
+
+/**
  * System VIA
  */
 typedef struct {
@@ -262,6 +286,16 @@ typedef struct {
 } BBC1770FDC;
 
 /**
+ * Econet controller
+ */
+typedef struct {
+	/** Name */
+	const char *name;
+	/** Unimplemented I/O region */
+	BBCUnimplemented *unimp;
+} BBCEconet;
+
+/**
  * Analogue to digital converter
  */
 typedef struct {
@@ -272,14 +306,14 @@ typedef struct {
 } BBCADC;
 
 /**
- * Unimplemented I/O region
+ * Tube
  */
 typedef struct {
 	/** Name */
 	const char *name;
-	/** Memory region */
-	MemoryRegion mr;
-} BBCUnimplemented;
+	/** Unimplemented I/O region */
+	BBCUnimplemented *unimp;
+} BBCTube;
 
 #include "bbc_crt.h"
 
@@ -327,6 +361,8 @@ typedef struct {
 	MC6845CRTC *crtc;
 	/** ACIA */
 	MC6850ACIA *acia;
+	/** Serial ULA */
+	BBCSerialULA *serial_ula;
 	/** Video ULA */
 	BBCVideoULA *video_ula;
 	/** System VIA */
@@ -335,8 +371,12 @@ typedef struct {
 	BBCUserVIA *user_via;
 	/** Floppy disc controller */
 	BBC1770FDC *fdc;
+	/** Econet controller */
+	BBCEconet *econet;
 	/** Analogue to digital converter */
 	BBCADC *adc;
+	/** Tube */
+	BBCTube *tube;
 	/** Display */
 	BBCDisplay *crt;
 } BBCMicro;

@@ -27,6 +27,75 @@
 
 /******************************************************************************
  *
+ * Unimplemented I/O region
+ *
+ */
+
+/**
+ * Read from unimplemented I/O region
+ *
+ * @v opaque		Unimplemented I/O region
+ * @v addr		Address within region
+ * @v size		Size of read
+ * @ret data		Read data
+ */
+static uint64_t bbc_unimplemented_read ( void *opaque, hwaddr addr,
+					 unsigned int size ) {
+	BBCUnimplemented *unimp = opaque;
+
+	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from &%02lX\n",
+			unimp->name, addr );
+	return 0;
+}
+
+/**
+ * Write to unimplemented I/O region
+ *
+ * @v opaque		Unimplemented I/O region
+ * @v addr		Address within region
+ * @v data		Data to write
+ * @v size		Size of write
+ */
+static void bbc_unimplemented_write ( void *opaque, hwaddr addr, uint64_t data,
+				      unsigned int size ) {
+	BBCUnimplemented *unimp = opaque;
+
+	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write to &%02lX\n",
+			unimp->name, addr );
+}
+
+/** Unimplemented I/O region operations */
+static const MemoryRegionOps bbc_unimplemented_ops = {
+	.read = bbc_unimplemented_read,
+	.write = bbc_unimplemented_write,
+};
+
+/**
+ * Initialise unimplemented I/O region
+ *
+ * @v addr		Address
+ * @v size		Size
+ * @v name		Name
+ * @ret unimp		Unimplemented I/O region
+ */
+static BBCUnimplemented * bbc_unimplemented_init ( hwaddr addr, uint64_t size,
+						   const char *name ) {
+	MemoryRegion *address_space_mem = get_system_memory();
+	BBCUnimplemented *unimp = g_new0 ( BBCUnimplemented, 1 );
+
+	/* Initialise unimplemented I/O region */
+	unimp->name = name;
+
+	/* Initialise memory region */
+	memory_region_init_io ( &unimp->mr, &bbc_unimplemented_ops, unimp,
+				name, size );
+	memory_region_add_subregion ( address_space_mem, addr, &unimp->mr );
+
+	return unimp;
+}
+
+/******************************************************************************
+ *
  * I/O aliases
  *
  */
@@ -400,6 +469,7 @@ static void bbc_paged_rom_load ( BBCPagedROM *paged, unsigned int page,
  *
  * @v addr		Address
  * @v size		Size
+ * @v name		Name
  * @ret crtc		CRTC
  */
 static MC6845CRTC * bbc_crtc_init ( hwaddr addr, uint64_t size,
@@ -425,6 +495,7 @@ static MC6845CRTC * bbc_crtc_init ( hwaddr addr, uint64_t size,
  *
  * @v addr		Address
  * @v size		Size
+ * @v name		Name
  * @ret acia		ACIA
  */
 static MC6850ACIA * bbc_acia_init ( hwaddr addr, uint64_t size,
@@ -437,6 +508,33 @@ static MC6850ACIA * bbc_acia_init ( hwaddr addr, uint64_t size,
 	bbc_io_alias ( &acia->mr, addr, size );
 
 	return acia;
+}
+
+/******************************************************************************
+ *
+ * Serial ULA (SHEILA &10-&1F)
+ *
+ */
+
+/**
+ * Initialise serial ULA
+ *
+ * @v addr		Address
+ * @v size		Size
+ * @v name		Name
+ * @ret ula		Serial ULA
+ */
+static BBCSerialULA * bbc_serial_ula_init ( hwaddr addr, uint64_t size,
+					    const char *name ) {
+	BBCSerialULA *ula = g_new0 ( BBCSerialULA, 1 );
+
+	/* Initialise ULA */
+	ula->name = name;
+
+	/* Initialise as an unimplemented I/O region */
+	ula->unimp = bbc_unimplemented_init ( addr, size, name );
+
+	return ula;
 }
 
 /******************************************************************************
@@ -1362,7 +1460,34 @@ static BBC1770FDC * bbc_1770_fdc_init ( hwaddr addr, uint64_t size,
 
 /******************************************************************************
  *
- * Analogue to digital converter (UPD7002)
+ * Econet controller (SHEILA &A0-&BF)
+ *
+ */
+
+/**
+ * Initialise Econet controller
+ *
+ * @v addr		Address
+ * @v size		Size
+ * @v name		Name
+ * @ret econet		Econet controller
+ */
+static BBCEconet * bbc_econet_init ( hwaddr addr, uint64_t size,
+				     const char *name ) {
+	BBCEconet *econet = g_new0 ( BBCEconet, 1 );
+
+	/* Initialise Econet controller */
+	econet->name = name;
+
+	/* Initialise as an unimplemented I/O region */
+	econet->unimp = bbc_unimplemented_init ( addr, size, name );
+
+	return econet;
+}
+
+/******************************************************************************
+ *
+ * Analogue to digital converter (UPD7002) (SHEILA &C0-&DF)
  *
  */
 
@@ -1479,71 +1604,29 @@ static BBCADC * bbc_adc_init ( hwaddr addr, uint64_t size, const char *name ) {
 
 /******************************************************************************
  *
- * Unimplemented I/O region
+ * Tube (SHEILA &E0-&FF)
  *
  */
 
 /**
- * Read from unimplemented I/O region
- *
- * @v opaque		Unimplemented I/O region
- * @v addr		Address within region
- * @v size		Size of read
- * @ret data		Read data
- */
-static uint64_t bbc_unimplemented_read ( void *opaque, hwaddr addr,
-					 unsigned int size ) {
-	BBCUnimplemented *unimp = opaque;
-
-	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from &%02lX\n",
-			unimp->name, addr );
-	return 0;
-}
-
-/**
- * Write to unimplemented I/O region
- *
- * @v opaque		Unimplemented I/O region
- * @v addr		Address within region
- * @v data		Data to write
- * @v size		Size of write
- */
-static void bbc_unimplemented_write ( void *opaque, hwaddr addr, uint64_t data,
-				      unsigned int size ) {
-	BBCUnimplemented *unimp = opaque;
-
-	qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write to &%02lX\n",
-			unimp->name, addr );
-}
-
-/** Unimplemented I/O region operations */
-static const MemoryRegionOps bbc_unimplemented_ops = {
-	.read = bbc_unimplemented_read,
-	.write = bbc_unimplemented_write,
-};
-
-/**
- * Initialise unimplemented I/O region
+ * Initialise Tube
  *
  * @v addr		Address
  * @v size		Size
  * @v name		Name
- * @ret unimp		Unimplemented I/O region
+ * @ret tube		Tube
  */
-static BBCUnimplemented * bbc_unimplemented_init ( hwaddr addr, uint64_t size,
-						   const char *name ) {
-	MemoryRegion *address_space_mem = get_system_memory();
-	BBCUnimplemented *unimp = g_new0 ( BBCUnimplemented, 1 );
+static BBCTube * bbc_tube_init ( hwaddr addr, uint64_t size,
+				 const char *name ) {
+	BBCTube *tube = g_new0 ( BBCTube, 1 );
 
-	/* Initialise unimplemented I/O region */
-	unimp->name = name;
+	/* Initialise tube */
+	tube->name = name;
 
-	/* Initialise memory region */
-	memory_region_init_io ( &unimp->mr, &bbc_unimplemented_ops, unimp,
-				name, size );
-	memory_region_add_subregion ( address_space_mem, addr, &unimp->mr );
+	/* Initialise as an unimplemented I/O region */
+	tube->unimp = bbc_unimplemented_init ( addr, size, name );
 
-	return unimp;
+	return tube;
 }
 
 /******************************************************************************
@@ -1724,9 +1807,14 @@ static void bbc_io_init ( BBCMicro *bbc ) {
 	bbc->crtc = bbc_crtc_init ( BBC_SHEILA_CRTC_BASE, BBC_SHEILA_CRTC_SIZE,
 				    "crtc" );
 
-	/* Initialise serial system */
+	/* Initialise ACIA */
 	bbc->acia = bbc_acia_init ( BBC_SHEILA_ACIA_BASE, BBC_SHEILA_ACIA_SIZE,
 				    "acia" );
+
+	/* Initialise serial ULR */
+	bbc->serial_ula = bbc_serial_ula_init ( BBC_SHEILA_SERIAL_ULA_BASE,
+						BBC_SHEILA_SERIAL_ULA_SIZE,
+						"serial_ula" );
 
 	/* Initialise video ULA */
 	bbc->video_ula = bbc_video_ula_init ( BBC_SHEILA_VIDEO_ULA_BASE,
@@ -1752,9 +1840,17 @@ static void bbc_io_init ( BBCMicro *bbc ) {
 				       bbc->nmi[BBC_NMI_FDC_DRQ],
 				       bbc->nmi[BBC_NMI_FDC_INTRQ] );
 
+	/* Initialise Econet controller */
+	bbc->econet = bbc_econet_init ( BBC_SHEILA_ECONET_BASE,
+					BBC_SHEILA_ECONET_SIZE, "econet" );
+
 	/* Initialise analogue to digital converter */
 	bbc->adc = bbc_adc_init ( BBC_SHEILA_ADC_BASE, BBC_SHEILA_ADC_SIZE,
 				  "adc" );
+
+	/* Initialise Tube */
+	bbc->tube = bbc_tube_init ( BBC_SHEILA_TUBE_BASE, BBC_SHEILA_TUBE_SIZE,
+				    "tube" );
 }
 
 /**
