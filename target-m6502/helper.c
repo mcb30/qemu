@@ -181,6 +181,7 @@ void m6502_interrupt ( CPUM6502State *env ) {
 		break;
 	case EXCP_NMI:
 		qemu_log_mask ( CPU_LOG_INT, "NMI at &%04X\n", env->pc );
+		env->in_nmi = 1;
 		m6502_irq ( env, M6502_NMI_VECTOR );
 		break;
 	default:

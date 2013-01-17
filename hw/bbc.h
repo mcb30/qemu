@@ -368,10 +368,14 @@ typedef struct {
 	qemu_irq *irq;
 	/** Maskable interrupt status */
 	bool irq_active[BBC_IRQ_COUNT];
+	/** Maskable interrupt counter */
+	uint16_t irq_count;
 	/** Non-maskable interrupt */
 	qemu_irq *nmi;
 	/** Non-maskable interrupt status */
 	bool nmi_active[BBC_NMI_COUNT];
+	/** Non-maskable interrupt counter */
+	uint16_t nmi_count;
 	/** DIP switches */
 	uint8_t dip;
 	/** FRED */

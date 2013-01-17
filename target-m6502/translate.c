@@ -49,6 +49,7 @@ static M6502Register cpu_p_v = { .name = "V" };
 static M6502Register cpu_p_n = { .name = "N" };
 static M6502Register cpu_s = { .name = "S" };
 static TCGv_i32 cpu_pc;
+static TCGv_i32 cpu_in_nmi;
 
 #include "exec/gen-icount.h"
 
@@ -1212,6 +1213,9 @@ static void m6502_gen_rti ( DisasContext *dc ) {
 	tcg_temp_free_i32 ( cpu_p.var );
 	tcg_temp_free_i32 ( stack );
 
+	/* Clear "NMI executing" flag */
+	tcg_gen_movi_i32 ( cpu_in_nmi, 0 );
+
 	/* Generate jump */
 	tcg_gen_goto_tb ( 0 );
 	tcg_gen_exit_tb ( 0 );
@@ -1691,4 +1695,7 @@ void m6502_translate_init ( void ) {
 					 offsetof ( CPUM6502State, s ), "s" );
 	cpu_pc = tcg_global_mem_new ( TCG_AREG0,
 				      offsetof ( CPUM6502State, pc ), "pc" );
+	cpu_in_nmi = tcg_global_mem_new ( TCG_AREG0,
+					  offsetof ( CPUM6502State, in_nmi ),
+					  "in_nmi" );
 }

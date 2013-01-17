@@ -470,34 +470,32 @@ static void bbc_paged_rom_load ( BBCPagedROM *paged, unsigned int page,
  *
  * @v bbc		BBC Micro
  * @v active		Interrupt set status
- * @v count		Number of interrupts within set
+ * @v count		Interrupt set counter
  * @v cpu_irq_type	CPU interrupt type
  * @v n			Interrupt number
  * @v level		Interrupt level
  */
-static void bbc_interrupt ( BBCMicro *bbc, bool *active, unsigned int count,
+static void bbc_interrupt ( BBCMicro *bbc, bool *active, uint16_t *count,
 			    int cpu_irq_type, int n, int level ) {
-	unsigned int i;
 
-	/* Record status of this interrupt */
+	/* Do nothing unless interrupt has changed */
+	level = ( !! level );
+	if ( level == active[n] )
+		return;
+
+	/* Record state of this interrupt */
 	active[n] = level;
 
-	/* If this interrupt is active, assert the CPU interrupt */
+	/* Assert or deassert CPU interrupt */
 	if ( level ) {
-		cpu_interrupt ( bbc->cpu, cpu_irq_type );
-		return;
+		if ( ! *count )
+			cpu_interrupt ( bbc->cpu, cpu_irq_type );
+		(*count)++;
+	} else {
+		(*count)--;
+		if ( ! *count )
+			cpu_reset_interrupt ( bbc->cpu, cpu_irq_type );
 	}
-
-	/* Otherwise, if any interrupt is active, leave the CPU
-	 * interrupt asserted.
-	 */
-	for ( i = 0 ; i < count ; i++ ) {
-		if ( active[i] )
-			return;
-	}
-
-	/* Otherwise, deassert the CPU interrupt */
-	cpu_reset_interrupt ( bbc->cpu, cpu_irq_type );
 }
 
 /**
@@ -511,7 +509,7 @@ static void bbc_irq_handler ( void *opaque, int n, int level ) {
 	BBCMicro *bbc = opaque;
 
 	/* Control CPU IRQ pin */
-	bbc_interrupt ( bbc, bbc->irq_active, BBC_IRQ_COUNT,
+	bbc_interrupt ( bbc, bbc->irq_active, &bbc->irq_count,
 			CPU_INTERRUPT_HARD, n, level );
 }
 
@@ -526,7 +524,7 @@ static void bbc_nmi_handler ( void *opaque, int n, int level ) {
 	BBCMicro *bbc = opaque;
 
 	/* Control CPU NMI pin */
-	bbc_interrupt ( bbc, bbc->nmi_active, BBC_NMI_COUNT,
+	bbc_interrupt ( bbc, bbc->nmi_active, &bbc->nmi_count,
 			CPU_INTERRUPT_NMI, n, level );
 }
 
@@ -1979,6 +1977,11 @@ static const VMStateDescription vmstate_bbc = {
 	.version_id = 1,
 	.minimum_version_id = 1,
 	.fields = ( VMStateField[] ) {
+		VMSTATE_BOOL_ARRAY ( irq_active, BBCMicro, BBC_IRQ_COUNT ),
+		VMSTATE_UINT16 ( irq_count, BBCMicro ),
+		VMSTATE_BOOL_ARRAY ( nmi_active, BBCMicro, BBC_NMI_COUNT ),
+		VMSTATE_UINT16 ( nmi_count, BBCMicro ),
+		VMSTATE_UINT8 ( dip, BBCMicro ),
 		VMSTATE_END_OF_LIST()
 	},
 };

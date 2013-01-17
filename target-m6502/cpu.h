@@ -127,6 +127,22 @@ typedef struct CPUM6502State {
 	uint32_t s;
 	/** Program counter */
 	uint32_t pc;
+	/** NMI executing flag
+	 *
+	 * On a real 6502, NMI is an edge-sensitive signal.  This
+	 * creates potential issues in a VM: for example, the disk
+	 * controller might have to use a timer to generate NMIs for
+	 * each data byte.  We can get better performance by
+	 * pretending that NMI is level-sensitive, and adding a fake
+	 * "NMI executing" flag which is set on an NMI and cleared by
+	 * an RTI.  We treat this flag as disabling both IRQs and
+	 * NMIs.
+	 *
+	 * This is imperfect: in the unlikely case that an NMI handler
+	 * does not exit using RTI, then strange things are likely to
+	 * happen.
+	 */
+	uint32_t in_nmi;
 
 	/** Features */
 	unsigned int features;

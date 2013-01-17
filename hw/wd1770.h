@@ -36,8 +36,12 @@ typedef struct {
 	WD1770FDC *fdc;
 	/** Block device */
 	BlockDriverState *block;
-	/** Number of tracks on this block device */
-	uint8_t track_count;
+	/** Number of tracks on media */
+	uint8_t tracks;
+	/** Number of sectors per track on media */
+	uint8_t sectors;
+	/** Sector size of media */
+	uint16_t sector_size;
 
 	/** Current track position (may exceed limit of block device) */
 	uint8_t track;
@@ -78,6 +82,12 @@ struct WD1770FDC {
 	uint8_t data;
 	/** Step direction */
 	int8_t step;
+	/** Interrupt is forced on */
+	bool forced_intrq;
+	/** Offset within sector buffer */
+	uint16_t offset;
+	/** Size of sector buffer */
+	uint16_t remaining;
 };
 
 /** Size of memory region */
@@ -94,10 +104,12 @@ struct WD1770FDC {
 #define WD1770_CMD_VERIFY 0x04
 #define WD1770_CMD_DISABLE_SPIN_UP 0x08
 #define WD1770_CMD_UPDATE_TRACK 0x10
+#define WD1770_CMD_MULTIPLE 0x10
+#define WD1770_CMD_WRITE 0x20
+#define WD1770_CMD_FORCE_INTRQ 0x08
 
 /* Status register */
 #define WD1770_STAT_BUSY 0x01
-#define WD1770_STAT_INDEX 0x02
 #define WD1770_STAT_DRQ 0x02
 #define WD1770_STAT_NOT_TR00 0x04
 #define WD1770_STAT_LOST 0x04
