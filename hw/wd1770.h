@@ -36,6 +36,8 @@ typedef struct {
 	WD1770FDC *fdc;
 	/** Block device */
 	BlockDriverState *block;
+	/** Number of sides on media */
+	uint8_t sides;
 	/** Number of tracks on media */
 	uint8_t tracks;
 	/** Number of sectors per track on media */

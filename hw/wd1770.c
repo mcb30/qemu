@@ -107,6 +107,14 @@ static int wd1770_lba ( WD1770FDC *fdc, uint8_t sector ) {
 		return -1;
 	}
 
+	/* Check if side is present on media */
+	if ( fdc->side >= fdd->sides ) {
+		LOG_WD1770 ( "%s: track %d.%d sector %d not found: maximum "
+			     "side is %d\n", wd1770_name ( fdc ), fdc->track,
+			     fdc->side, sector, ( fdd->sides - 1 ) );
+		return -1;
+	}
+
 	/* Check if track is present on media */
 	if ( fdd->track >= fdd->tracks ) {
 		LOG_WD1770 ( "%s: track %d.%d sector %d not found: maximum "
@@ -124,7 +132,8 @@ static int wd1770_lba ( WD1770FDC *fdc, uint8_t sector ) {
 	}
 
 	/* Calculate logical block address */
-	lba = ( ( fdd->sectors * ( fdc->track * 2 + fdc->side ) ) + sector );
+	lba = ( ( fdd->sectors * ( fdc->track * fdd->sides + fdc->side ) )
+		+ sector );
 	LOG_WD1770 ( "%s: track %d.%d sector %d is LBA %d\n",
 		     wd1770_name ( fdc ), fdc->track, fdc->side, sector, lba );
 
@@ -830,9 +839,20 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 	//
 	// HACK
 	//
+
+#if 0
+	// ADFS / DDFS
+	fdc->fdds[0].sides = 2;
 	fdc->fdds[0].tracks = 80;
 	fdc->fdds[0].sectors = 16;
 	fdc->fdds[0].sector_size_log2 = 8;
+#else
+	// DFS single-sided
+	fdc->fdds[0].sides = 1;
+	fdc->fdds[0].tracks = 80;
+	fdc->fdds[0].sectors = 10;
+	fdc->fdds[0].sector_size_log2 = 8;
+#endif
 
 
 	return 0;

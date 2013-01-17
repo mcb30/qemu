@@ -1485,6 +1485,8 @@ static void bbc_1770_fdc_write ( void *opaque, hwaddr addr, uint64_t data64,
 
 	/* Write to control register */
 	fdc->control = data;
+	qemu_log_mask ( CPU_LOG_IOPORT, "%s: control register (&%02lX) set to "
+			"&%02X\n", fdc->name, addr, data );
 
 	/* Select drive number */
 	switch ( data & BBC_1770_FDC_DRIVE_MASK ) {
