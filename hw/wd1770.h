@@ -41,7 +41,7 @@ typedef struct {
 	/** Number of sectors per track on media */
 	uint8_t sectors;
 	/** Sector size of media */
-	uint16_t sector_size;
+	uint16_t sector_size_log2;
 
 	/** Current track position (may exceed limit of block device) */
 	uint8_t track;

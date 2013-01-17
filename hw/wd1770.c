@@ -65,18 +65,18 @@ static WD1770FDD * wd1770_fdd ( WD1770FDC *fdc ) {
 }
 
 /**
- * Calculate block device sector address
+ * Calculate logical block address
  *
  * @v fdc		1770 FDC
  * @v sector		Sector number
- * @v block_sector	Block device sector address, or negative on error
+ * @v block_sector	Logical block address, or negative on error
  *
  * Check to see if the (track,sector) tuple can be found on the
- * current track.  If so, return the block device sector address.
+ * current track.  If so, return the logical block address.
  */
-static int64_t wd1770_block_sector ( WD1770FDC *fdc, uint8_t sector ) {
+static int wd1770_lba ( WD1770FDC *fdc, uint8_t sector ) {
 	WD1770FDD *fdd = wd1770_fdd ( fdc );
-	int64_t block_sector;
+	int lba;
 
 	/* Check if drive exists */
 	if ( ! fdd ) {
@@ -123,15 +123,12 @@ static int64_t wd1770_block_sector ( WD1770FDC *fdc, uint8_t sector ) {
 		return -1;
 	}
 
-	/* Calculate block device sector address */
-	block_sector = ( ( ( fdc->track * fdd->sectors *
-			     ( 2 + fdc->side ) ) + sector ) *
-			 ( fdd->sector_size >> BDRV_SECTOR_BITS ) );
-	LOG_WD1770 ( "%s: track %d.%d sector %d is block sector %" PRId64 "\n",
-		     wd1770_name ( fdc ), fdc->track, fdc->side, sector,
-		     block_sector );
+	/* Calculate logical block address */
+	lba = ( ( fdd->sectors * ( fdc->track * 2 + fdc->side ) ) + sector );
+	LOG_WD1770 ( "%s: track %d.%d sector %d is LBA %d\n",
+		     wd1770_name ( fdc ), fdc->track, fdc->side, sector, lba );
 
-	return block_sector;
+	return lba;
 }
 
 /**
@@ -283,7 +280,7 @@ static void wd1770_seek ( WD1770FDC *fdc, int track_phys_delta,
 		     wd1770_name ( fdc ), ( fdd ? fdd->track : -1 ),
 		     fdc->side, fdc->track,
 		     ( fdd ? ( ( fdd->track == fdc->track ) ?
-			       "" : " mismatch" ) : "no drive" ) );
+			       "" : " mismatch" ) : " no drive" ) );
 
 	/* Indicate whether or not physical head is on track 0 */
 	if ( ( fdd == NULL ) || ( fdd->track != 0 ) )
@@ -291,7 +288,7 @@ static void wd1770_seek ( WD1770FDC *fdc, int track_phys_delta,
 
 	/* Verify track presence if asked to do so */
 	if ( ( fdc->command & WD1770_CMD_VERIFY ) &&
-	     ( wd1770_block_sector ( fdc, 0 ) < 0 ) ) {
+	     ( wd1770_lba ( fdc, 0 ) < 0 ) ) {
 		fdc->status |= WD1770_STAT_NOT_FOUND;
 		wd1770_done ( fdc, true );
 		return;
@@ -308,23 +305,46 @@ static void wd1770_seek ( WD1770FDC *fdc, int track_phys_delta,
  */
 static void wd1770_read_sector ( WD1770FDC *fdc ) {
 	WD1770FDD *fdd = wd1770_fdd ( fdc );
+	int lba;
+	unsigned int shift;
 	int64_t block_sector;
+	int block_count;
+	uint16_t offset;
 
 	/* Switch on motor if instructed to do so */
 	if ( ! ( fdc->command & WD1770_CMD_DISABLE_SPIN_UP ) )
 		fdc->status |= WD1770_STAT_MOTOR_ON;
 
-	/* Calculate block sector address */
-	block_sector = wd1770_block_sector ( fdc, fdc->sector );
-	if ( block_sector < 0 ) {
+	/* Check that sector can be found, and get LBA */
+	lba = wd1770_lba ( fdc, fdc->sector );
+	if ( lba < 0 ) {
 		fdc->status |= WD1770_STAT_NOT_FOUND;
 		wd1770_done ( fdc, true );
 		return;
 	}
 
+	/* Calculate block sector address, count, and offset */
+	if ( fdd->sector_size_log2 >= BDRV_SECTOR_BITS ) {
+		/* Floppy sector contains one or more block sectors */
+		shift = ( fdd->sector_size_log2 - BDRV_SECTOR_BITS );
+		block_sector = ( lba << shift );
+		block_count = ( 1 << shift );
+		offset = 0;
+	} else {
+		/* Floppy sector is less than one block sector */
+		shift = ( BDRV_SECTOR_BITS - fdd->sector_size_log2 );
+		block_sector = ( lba >> shift );
+		block_count = 1;
+		offset = ( ( lba << fdd->sector_size_log2 ) &
+			   ~BDRV_SECTOR_MASK );
+	}
+	LOG_WD1770 ( "%s: LBA %d is block sector %ld-%ld offset %d\n",
+		     wd1770_name ( fdc ), lba, block_sector,
+		     ( block_sector + block_count - 1 ), offset );
+
 	/* Read data into sector buffer */
 	if ( bdrv_read ( fdd->block, block_sector, fdc->buf,
-			 ( fdd->sector_size >> BDRV_SECTOR_BITS ) ) < 0 ) {
+			 block_count ) < 0 ) {
 		LOG_WD1770 ( "%s: could not read from %s\n",
 			     wd1770_name ( fdc ),
 			     bdrv_get_device_name ( fdd->block ) );
@@ -334,9 +354,9 @@ static void wd1770_read_sector ( WD1770FDC *fdc ) {
 	}
 
 	/* Reset offset and place first byte in data register */
-	fdc->offset = 0;
-	fdc->remaining = fdd->sector_size;
-	fdc->data = fdc->buf[0];
+	fdc->offset = offset;
+	fdc->remaining = ( 1 << fdd->sector_size_log2 );
+	fdc->data = fdc->buf[offset];
 
 	/* Assert data interrupt */
 	fdc->status |= WD1770_STAT_DRQ;
@@ -812,7 +832,7 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 	//
 	fdc->fdds[0].tracks = 80;
 	fdc->fdds[0].sectors = 16;
-	fdc->fdds[0].sector_size = 512;
+	fdc->fdds[0].sector_size_log2 = 8;
 
 
 	return 0;
