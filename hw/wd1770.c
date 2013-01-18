@@ -96,10 +96,21 @@ static int wd1770_lba ( WD1770FDC *fdc, uint8_t sector ) {
 		return -1;
 	}
 
+	/* Check if density is correct for the media.  If the density
+	 * is incorrect, then the wrong decoding will be applied and
+	 * the (track,sector) tuple will not be detected.
+	 */
+	if ( fdd->single_density != fdc->single_density ) {
+		LOG_WD1770 ( "%s: track %d.%d sector %d not found: wrong "
+			     "density\n", wd1770_name ( fdc ), fdc->track,
+			     fdc->side, sector );
+		return -1;
+	}
+
 	/* Check if track register matches physical track.  If the
 	 * register does not match, then the (track,sector) tuple will
 	 * not be detected.
-	*/
+	 */
 	if ( fdd->track != fdc->track ) {
 		LOG_WD1770 ( "%s: track %d.%d sector %d not found: mismatch "
 			     "(physical track %d)\n", wd1770_name ( fdc ),
@@ -379,16 +390,22 @@ static void wd1770_read_sector ( WD1770FDC *fdc ) {
  */
 static void wd1770_read_next ( WD1770FDC *fdc ) {
 
+	/* Deassert data interrupt */
+	fdc->status &= ~WD1770_STAT_DRQ;
+	qemu_irq_lower ( fdc->drq );
+
 	/* Increment offset */
 	fdc->offset++;
 	fdc->remaining--;
 
 	/* If we have not yet reached the end of the sector, place the
-	 * next byte into the data register and return, leaving the
-	 * data interrupt asserted.
+	 * next byte into the data register and return, reasserting
+	 * the data interrupt.
 	 */
 	if ( fdc->remaining ) {
 		fdc->data = fdc->buf[fdc->offset];
+		fdc->status |= WD1770_STAT_DRQ;
+		qemu_irq_raise ( fdc->drq );
 		return;
 	}
 
@@ -589,8 +606,8 @@ static void wd1770_command_write ( WD1770FDC *fdc, uint8_t command ) {
 		wd1770_command_step_out,	wd1770_command_step_out,
 		wd1770_command_read_sector,	wd1770_command_read_sector,
 		wd1770_command_write_sector,	wd1770_command_write_sector,
-		wd1770_command_read_address,	wd1770_command_read_track,
-		wd1770_command_write_track,	wd1770_command_force_interrupt,
+		wd1770_command_read_address,	wd1770_command_force_interrupt,
+		wd1770_command_read_track,	wd1770_command_write_track,
 	};
 	wd1770_command_handler handler = handlers[ command >> 4 ];
 
@@ -603,8 +620,9 @@ static void wd1770_command_write ( WD1770FDC *fdc, uint8_t command ) {
 
 	/* If controller is busy, then ignore the command */
 	if ( fdc->status & WD1770_STAT_BUSY ) {
-		LOG_WD1770 ( "%s: (0x%02x) command ignored while busy\n",
-			     wd1770_name ( fdc ), command );
+		LOG_WD1770 ( "%s: (0x%02x) command ignored while busy (%d "
+			     "bytes remaining)\n", wd1770_name ( fdc ),
+			     command, fdc->remaining );
 		return;
 	}
 
@@ -842,12 +860,15 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 
 #if 0
 	// ADFS / DDFS
+	fdc->fdds[0].single_density = false;
 	fdc->fdds[0].sides = 2;
 	fdc->fdds[0].tracks = 80;
 	fdc->fdds[0].sectors = 16;
 	fdc->fdds[0].sector_size_log2 = 8;
-#else
+#endif
+#if 1
 	// DFS single-sided
+	fdc->fdds[0].single_density = true;
 	fdc->fdds[0].sides = 1;
 	fdc->fdds[0].tracks = 80;
 	fdc->fdds[0].sectors = 10;

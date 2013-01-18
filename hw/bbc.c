@@ -26,6 +26,17 @@
 #include "loader.h"
 #include "bbc.h"
 
+/**
+ * Get device name for log messages
+ *
+ * @v bbc		BBC Micro
+ * @ret name		Device name
+ */
+static inline const char * bbc_name ( BBCMicro *bbc ) {
+
+	return qdev_fw_name ( &bbc->qdev );
+}
+
 /******************************************************************************
  *
  * Unimplemented I/O region
@@ -477,6 +488,10 @@ static void bbc_paged_rom_load ( BBCPagedROM *paged, unsigned int page,
  */
 static void bbc_interrupt ( BBCMicro *bbc, bool *active, uint16_t *count,
 			    int cpu_irq_type, int n, int level ) {
+	static const char *cpu_irq_type_name[] = {
+		[CPU_INTERRUPT_HARD] = "IRQ",
+		[CPU_INTERRUPT_NMI] = "NMI",
+	};
 
 	/* Do nothing unless interrupt has changed */
 	level = ( !! level );
@@ -486,15 +501,23 @@ static void bbc_interrupt ( BBCMicro *bbc, bool *active, uint16_t *count,
 	/* Record state of this interrupt */
 	active[n] = level;
 
-	/* Assert or deassert CPU interrupt */
+	/* Assert or deassert CPU interrupt if applicable */
 	if ( level ) {
-		if ( ! *count )
+		if ( ! *count ) {
 			cpu_interrupt ( bbc->cpu, cpu_irq_type );
+			qemu_log_mask ( CPU_LOG_INT, "%s: asserted %s\n",
+					bbc_name ( bbc ),
+					cpu_irq_type_name[cpu_irq_type] );
+		}
 		(*count)++;
 	} else {
 		(*count)--;
-		if ( ! *count )
+		if ( ! *count ) {
 			cpu_reset_interrupt ( bbc->cpu, cpu_irq_type );
+			qemu_log_mask ( CPU_LOG_INT, "%s: deasserted %s\n",
+					bbc_name ( bbc ),
+					cpu_irq_type_name[cpu_irq_type] );
+		}
 	}
 }
 
@@ -1554,8 +1577,8 @@ static const VMStateDescription vmstate_bbc_1770_fdc = {
  * @ret fdc		1770 FDC
  */
 static BBC1770FDC * bbc_1770_fdc_init ( hwaddr addr, uint64_t size,
-					const char *name, qemu_irq drq,
-					qemu_irq intrq ) {
+					const char *name, CPUM6502State *cpu,
+					qemu_irq drq, qemu_irq intrq ) {
 	MemoryRegion *address_space_mem = get_system_memory();
 	BBC1770FDC *fdc = g_new0 ( BBC1770FDC, 1 );
 	DriveInfo *fds[WD1770_DRIVE_COUNT];
@@ -1883,7 +1906,7 @@ static void bbc_io_init ( BBCMicro *bbc ) {
 
 	/* Initialise floppy disc controller */
 	bbc->fdc = bbc_1770_fdc_init ( BBC_SHEILA_FDC_BASE,
-				       BBC_SHEILA_FDC_SIZE, "fdc",
+				       BBC_SHEILA_FDC_SIZE, "fdc", bbc->cpu,
 				       bbc->nmi[BBC_NMI_FDC_DRQ],
 				       bbc->nmi[BBC_NMI_FDC_INTRQ] );
 
