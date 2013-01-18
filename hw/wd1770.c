@@ -331,9 +331,11 @@ static void wd1770_read_sector ( WD1770FDC *fdc ) {
 	int block_count;
 	uint16_t offset;
 
-	/* Switch on motor if instructed to do so */
-	if ( ! ( fdc->command & WD1770_CMD_DISABLE_SPIN_UP ) )
-		fdc->status |= WD1770_STAT_MOTOR_ON;
+	/* Switch on motor.  Do this unconditionally, ignoring the
+	 * WD1770_CMD_DISABLE_SPIN_UP bit since this bit has a
+	 * different meaning on WD1773.
+	 */
+	fdc->status |= WD1770_STAT_MOTOR_ON;
 
 	/* Check that sector can be found, and get LBA */
 	lba = wd1770_lba ( fdc, fdc->sector );
@@ -654,7 +656,6 @@ static uint8_t wd1770_status_read ( WD1770FDC *fdc ) {
 
 	/* Read status register */
 	data = fdc->status;
-	LOG_WD1770 ( "%s: status=0x%02x\n", wd1770_name ( fdc ), data );
 
 	/* Clear completion interrupt */
 	if ( ! fdc->forced_intrq )
@@ -859,7 +860,7 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 	// HACK
 	//
 
-#if 0
+#if 1
 	// ADFS / DDFS
 	fdc->fdds[0].single_density = false;
 	fdc->fdds[0].sides = 2;
@@ -867,7 +868,7 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 	fdc->fdds[0].sectors = 16;
 	fdc->fdds[0].sector_size_log2 = 8;
 #endif
-#if 1
+#if 0
 	// DFS single-sided
 	fdc->fdds[0].single_density = true;
 	fdc->fdds[0].sides = 1;
