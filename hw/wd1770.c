@@ -303,8 +303,8 @@ static void wd1770_seek ( WD1770FDC *fdc, int track_phys_delta,
 			       "" : " mismatch" ) : " no drive" ) );
 
 	/* Indicate whether or not physical head is on track 0 */
-	if ( ( fdd == NULL ) || ( fdd->track != 0 ) )
-		fdc->status |= WD1770_STAT_NOT_TR00;
+	if ( ( fdd != NULL ) && ( fdd->track == 0 ) )
+		fdc->status |= WD1770_STAT_TR00;
 
 	/* Verify track presence if asked to do so */
 	if ( ( fdc->command & WD1770_CMD_VERIFY ) &&
@@ -654,6 +654,7 @@ static uint8_t wd1770_status_read ( WD1770FDC *fdc ) {
 
 	/* Read status register */
 	data = fdc->status;
+	LOG_WD1770 ( "%s: status=0x%02x\n", wd1770_name ( fdc ), data );
 
 	/* Clear completion interrupt */
 	if ( ! fdc->forced_intrq )

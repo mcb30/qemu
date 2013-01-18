@@ -919,7 +919,7 @@ static void m6502_gen_comp_imm ( DisasContext *dc ) {
 	tcg_gen_andi_i32 ( cpu_p_n.var, cpu_p_n.var, 0x80 );
 
 	/* Generate disassembly */
-	LOG_DIS ( "&%04X : C%s%s #%02X\n", dc->pc,
+	LOG_DIS ( "&%04X : C%s%s #&%02X\n", dc->pc,
 		  ( ( src == &cpu_a ) ? "M" : "P" ),
 		  ( ( src == &cpu_a ) ? "P" : src->name ), value );
 }
