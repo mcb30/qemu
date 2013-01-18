@@ -60,3 +60,7 @@ uint32_t helper_get_p ( CPUM6502State *env ) {
 void helper_set_p ( CPUM6502State *env, uint32_t p ) {
 	m6502_set_p ( env, p );
 }
+
+void helper_rti ( CPUM6502State *env ) {
+	m6502_rti ( env );
+}

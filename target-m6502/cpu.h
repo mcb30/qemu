@@ -127,22 +127,36 @@ typedef struct CPUM6502State {
 	uint32_t s;
 	/** Program counter */
 	uint32_t pc;
+
 	/** NMI executing flag
 	 *
-	 * On a real 6502, NMI is an edge-sensitive signal.  This
-	 * creates potential issues in a VM: for example, the disk
-	 * controller might have to use a timer to generate NMIs for
-	 * each data byte.  We can get better performance by
-	 * pretending that NMI is level-sensitive, and adding a fake
-	 * "NMI executing" flag which is set on an NMI and cleared by
-	 * an RTI.  We treat this flag as disabling both IRQs and
-	 * NMIs.
+	 * On a real 6502, NMI is an edge-sensitive interrupt which
+	 * cannot be blocked by anything.  It is typically used for
+	 * latency-sensitive applications such as transferring each
+	 * data byte during a disk I/O on systems that do not support
+	 * DMA.
 	 *
-	 * This is imperfect: in the unlikely case that an NMI handler
-	 * does not exit using RTI, then strange things are likely to
-	 * happen.
+	 * This creates potential issues in a VM: for example, the
+	 * disk controller might have to use a high-frequency timer to
+	 * generate NMIs for each data byte.  If the frequency is too
+	 * high then the virtual CPU will lose data, if the frequency
+	 * is too low then performance suffers.
+	 *
+	 * We can get better performance by deferring NMIs (and IRQs)
+	 * while an NMI handler is currently executing.  The virtual
+	 * hardware can then deassert and reassert the interrupt
+	 * immediately, without causing the CPU to reenter the NMI
+	 * handler.  Upon reaching an RTI instruction, the "NMI
+	 * executing" flag will be cleared, allowing the deferred NMI
+	 * to happen.
+	 *
+	 * This scheme assumes that an NMI handler must exit with an
+	 * RTI, that an NMI handler does not reenable interrupts
+	 * before exiting, and that an NMI handler does not use RTI
+	 * except to exit.  These should be reasonable assumptions to
+	 * make.
 	 */
-	uint32_t in_nmi;
+	bool in_nmi;
 
 	/** Features */
 	unsigned int features;
@@ -155,6 +169,8 @@ typedef struct CPUM6502State {
 
 extern unsigned int m6502_get_p ( CPUM6502State *env );
 extern void m6502_set_p ( CPUM6502State *env, unsigned int p );
+
+extern void m6502_rti ( CPUM6502State *env );
 
 /**
  * Check if interrupts are enabled

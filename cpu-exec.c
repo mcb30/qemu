@@ -369,6 +369,7 @@ int cpu_exec(CPUArchState *env)
 #elif defined(TARGET_M6502)
 		    if ((interrupt_request & CPU_INTERRUPT_NMI)
 			&& (!env->in_nmi)) {
+			env->interrupt_request &= ~CPU_INTERRUPT_NMI;
                         env->exception_index = EXCP_NMI;
                         do_interrupt(env);
                         next_tb = 0;

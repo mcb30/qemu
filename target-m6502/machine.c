@@ -36,6 +36,7 @@ static const VMStateDescription vmstate_cpu = {
 		VMSTATE_UINT32 ( p_n, CPUM6502State ),
 		VMSTATE_UINT32 ( s, CPUM6502State ),
 		VMSTATE_UINT32 ( pc, CPUM6502State ),
+		VMSTATE_BOOL ( in_nmi, CPUM6502State ),
 		VMSTATE_END_OF_LIST()
 	},
 };

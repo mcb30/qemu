@@ -161,15 +161,30 @@ static void m6502_irq ( CPUM6502State *env, uint16_t vector ) {
 
 	/* Push program counter and status register onto stack */
 	stack = ( M6502_STACK_BASE + env->s );
+	env->s = ( ( env->s - 0x03 ) & 0xff );
 	cpu_stw_data ( env, ( stack - 1 ), env->pc );
 	cpu_stb_data ( env, ( stack - 2 ), m6502_get_p ( env ) );
-	env->s = ( ( env->s - 0x03 ) & 0xff );
 
 	/* Disable interrupts */
 	env->p_i = 1;
 
 	/* Load program counter from vector */
 	env->pc = cpu_lduw_data ( env, vector );
+}
+
+void m6502_rti ( CPUM6502State *env ) {
+	uint16_t stack;
+
+	qemu_log_mask ( CPU_LOG_INT, "RTI from &%04X\n", env->pc );
+
+	/* Pop status register and program counter from stack */
+	env->s = ( ( env->s + 0x03 ) & 0xff );
+	stack = ( M6502_STACK_BASE + env->s );
+	env->pc = cpu_lduw_data ( env, ( stack - 1 ) );
+	m6502_set_p ( env, cpu_ldub_data ( env, ( stack - 2 ) ) );
+
+	/* Clear "NMI executing" flag */
+	env->in_nmi = 0;
 }
 
 void m6502_interrupt ( CPUM6502State *env ) {

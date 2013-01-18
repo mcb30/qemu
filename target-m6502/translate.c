@@ -49,7 +49,6 @@ static M6502Register cpu_p_v = { .name = "V" };
 static M6502Register cpu_p_n = { .name = "N" };
 static M6502Register cpu_s = { .name = "S" };
 static TCGv_i32 cpu_pc;
-static TCGv_i32 cpu_in_nmi;
 
 #include "exec/gen-icount.h"
 
@@ -1196,25 +1195,13 @@ static void m6502_gen_break ( DisasContext *dc ) {
  * @v dc		Disassembly context
  */
 static void m6502_gen_rti ( DisasContext *dc ) {
-	TCGv_i32 stack;
 
-	/* Increment stack pointer by three (with wrap-around) */
-	tcg_gen_addi_i32 ( cpu_s.var, cpu_s.var, 3 );
-	tcg_gen_andi_i32 ( cpu_s.var, cpu_s.var, 0xff );
-
-	/* Retrieve status register and return address from stack */
-	stack = tcg_temp_new_i32();
-	cpu_p.var = tcg_temp_new_i32();
-	tcg_gen_addi_i32 ( stack, cpu_s.var, M6502_STACK_BASE - 1 );
-	tcg_gen_qemu_ld16u ( cpu_pc, stack, MEM_INDEX );
-	tcg_gen_addi_i32 ( stack, cpu_s.var, M6502_STACK_BASE - 2 );
-	tcg_gen_qemu_ld8u ( cpu_p.var, stack, MEM_INDEX );
-	gen_helper_set_p ( cpu_env, cpu_p.var );
-	tcg_temp_free_i32 ( cpu_p.var );
-	tcg_temp_free_i32 ( stack );
-
-	/* Clear "NMI executing" flag */
-	tcg_gen_movi_i32 ( cpu_in_nmi, 0 );
+	/* Use a helper to implement the whole RTI instruction.  We
+	 * have to call two helpers anyway (for m6502_set_p() and to
+	 * call any registered interrupt completion handlers), so we
+	 * may as well do all the work inside the handler.
+	 */
+	gen_helper_rti ( cpu_env );
 
 	/* Generate jump */
 	tcg_gen_goto_tb ( 0 );
@@ -1578,6 +1565,8 @@ static void m6502_gen_intermediate_code_internal ( CPUM6502State *env,
 	gen_icount_start();
 
 	/* Main instruction generation loop */
+	LOG_DIS ( "&%04X : start (search_pc=%d, max_insn=%d)\n",
+		  dc->pc, search_pc, max_insns );
 	do {
 		/* Check for breakpoints */
 		if ( m6502_check_breakpoints ( dc ) )
@@ -1695,7 +1684,4 @@ void m6502_translate_init ( void ) {
 					 offsetof ( CPUM6502State, s ), "s" );
 	cpu_pc = tcg_global_mem_new ( TCG_AREG0,
 				      offsetof ( CPUM6502State, pc ), "pc" );
-	cpu_in_nmi = tcg_global_mem_new ( TCG_AREG0,
-					  offsetof ( CPUM6502State, in_nmi ),
-					  "in_nmi" );
 }
