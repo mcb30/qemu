@@ -30,7 +30,7 @@ typedef struct WD1770FDC WD1770FDC;
 /** Maximum sector size */
 #define WD1770_MAX_SECTOR_SIZE 1024
 
-/** 1770 FDC drive */
+/** 1770 FDC attached drive */
 typedef struct {
 	/** Controller */
 	WD1770FDC *fdc;

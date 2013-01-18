@@ -65,18 +65,20 @@ static WD1770FDD * wd1770_fdd ( WD1770FDC *fdc ) {
 }
 
 /**
- * Calculate logical block address
+ * Calculate offset within block device
  *
  * @v fdc		1770 FDC
  * @v sector		Sector number
- * @v block_sector	Logical block address, or negative on error
+ * @ret offset		Offset, or negative on error
  *
  * Check to see if the (track,sector) tuple can be found on the
- * current track.  If so, return the logical block address.
+ * current track of the currently-selected drive.  If so, return the
+ * byte offset to the start of the sector.
  */
-static int wd1770_lba ( WD1770FDC *fdc, uint8_t sector ) {
+static int64_t wd1770_offset ( WD1770FDC *fdc, uint8_t sector ) {
 	WD1770FDD *fdd = wd1770_fdd ( fdc );
-	int lba;
+	unsigned int lba;
+	int64_t offset;
 
 	/* Check if drive exists */
 	if ( ! fdd ) {
@@ -142,13 +144,15 @@ static int wd1770_lba ( WD1770FDC *fdc, uint8_t sector ) {
 		return -1;
 	}
 
-	/* Calculate logical block address */
+	/* Calculate logical block address, if applicable */
 	lba = ( ( fdd->sectors * ( fdc->track * fdd->sides + fdc->side ) )
 		+ sector );
-	LOG_WD1770 ( "%s: track %d.%d sector %d is LBA %d\n",
-		     wd1770_name ( fdc ), fdc->track, fdc->side, sector, lba );
+	offset = ( lba << fdd->sector_size_log2 );
+	LOG_WD1770 ( "%s: track %d.%d sector %d is LBA %d offset %" PRId64 "\n",
+		     wd1770_name ( fdc ), fdc->track, fdc->side, sector,
+		     lba, offset );
 
-	return lba;
+	return offset;
 }
 
 /**
@@ -308,7 +312,7 @@ static void wd1770_seek ( WD1770FDC *fdc, int track_phys_delta,
 
 	/* Verify track presence if asked to do so */
 	if ( ( fdc->command & WD1770_CMD_VERIFY ) &&
-	     ( wd1770_lba ( fdc, 0 ) < 0 ) ) {
+	     ( wd1770_offset ( fdc, 0 ) < 0 ) ) {
 		fdc->status |= WD1770_STAT_NOT_FOUND;
 		wd1770_done ( fdc, true );
 		return;
@@ -325,11 +329,7 @@ static void wd1770_seek ( WD1770FDC *fdc, int track_phys_delta,
  */
 static void wd1770_read_sector ( WD1770FDC *fdc ) {
 	WD1770FDD *fdd = wd1770_fdd ( fdc );
-	int lba;
-	unsigned int shift;
-	int64_t block_sector;
-	int block_count;
-	uint16_t offset;
+	int64_t offset;
 
 	/* Switch on motor.  Do this unconditionally, ignoring the
 	 * WD1770_CMD_DISABLE_SPIN_UP bit since this bit has a
@@ -337,36 +337,23 @@ static void wd1770_read_sector ( WD1770FDC *fdc ) {
 	 */
 	fdc->status |= WD1770_STAT_MOTOR_ON;
 
-	/* Check that sector can be found, and get LBA */
-	lba = wd1770_lba ( fdc, fdc->sector );
-	if ( lba < 0 ) {
+	/* Check that sector can be found, and calculate the block
+	 * device offset.
+	 */
+	offset = wd1770_offset ( fdc, fdc->sector );
+	if ( offset < 0 ) {
 		fdc->status |= WD1770_STAT_NOT_FOUND;
 		wd1770_done ( fdc, true );
 		return;
 	}
 
-	/* Calculate block sector address, count, and offset */
-	if ( fdd->sector_size_log2 >= BDRV_SECTOR_BITS ) {
-		/* Floppy sector contains one or more block sectors */
-		shift = ( fdd->sector_size_log2 - BDRV_SECTOR_BITS );
-		block_sector = ( lba << shift );
-		block_count = ( 1 << shift );
-		offset = 0;
-	} else {
-		/* Floppy sector is less than one block sector */
-		shift = ( BDRV_SECTOR_BITS - fdd->sector_size_log2 );
-		block_sector = ( lba >> shift );
-		block_count = 1;
-		offset = ( ( lba << fdd->sector_size_log2 ) &
-			   ~BDRV_SECTOR_MASK );
-	}
-	LOG_WD1770 ( "%s: LBA %d is block sector %ld-%ld offset %d\n",
-		     wd1770_name ( fdc ), lba, block_sector,
-		     ( block_sector + block_count - 1 ), offset );
+	/* Reset sector buffer */
+	fdc->offset = 0;
+	fdc->remaining = ( 1 << fdd->sector_size_log2 );
 
 	/* Read data into sector buffer */
-	if ( bdrv_read ( fdd->block, block_sector, fdc->buf,
-			 block_count ) < 0 ) {
+	if ( bdrv_pread ( fdd->block, offset, fdc->buf,
+			  ( 1 << fdd->sector_size_log2 ) ) < 0 ) {
 		LOG_WD1770 ( "%s: could not read from %s\n",
 			     wd1770_name ( fdc ),
 			     bdrv_get_device_name ( fdd->block ) );
@@ -375,12 +362,8 @@ static void wd1770_read_sector ( WD1770FDC *fdc ) {
 		return;
 	}
 
-	/* Reset offset and place first byte in data register */
-	fdc->offset = offset;
-	fdc->remaining = ( 1 << fdd->sector_size_log2 );
-	fdc->data = fdc->buf[offset];
-
-	/* Assert data interrupt */
+	/* Place first byte in data register and assert data interrupt */
+	fdc->data = fdc->buf[0];
 	fdc->status |= WD1770_STAT_DRQ;
 	qemu_irq_raise ( fdc->drq );
 }
@@ -417,6 +400,97 @@ static void wd1770_read_next ( WD1770FDC *fdc ) {
 	if ( fdc->command & WD1770_CMD_MULTIPLE ) {
 		fdc->sector++;
 		wd1770_read_sector ( fdc );
+		return;
+	}
+
+	/* Otherwise, mark the operation as complete */
+	wd1770_done ( fdc, true );
+}
+
+/**
+ * Start writing to current sector
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_write_sector ( WD1770FDC *fdc ) {
+	WD1770FDD *fdd = wd1770_fdd ( fdc );
+
+	/* Switch on motor.  Do this unconditionally, ignoring the
+	 * WD1770_CMD_DISABLE_SPIN_UP bit since this bit has a
+	 * different meaning on WD1773.
+	 */
+	fdc->status |= WD1770_STAT_MOTOR_ON;
+
+	/* Check that sector can be found */
+	if ( wd1770_offset ( fdc, fdc->sector ) < 0 ) {
+		fdc->status |= WD1770_STAT_NOT_FOUND;
+		wd1770_done ( fdc, true );
+		return;
+	}
+
+	/* Reset sector buffer */
+	fdc->offset = 0;
+	fdc->remaining = ( 1 << fdd->sector_size_log2 );
+
+	/* Assert data interrupt to request first byte */
+	fdc->status |= WD1770_STAT_DRQ;
+	qemu_irq_raise ( fdc->drq );
+}
+
+/**
+ * Write next byte
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_write_next ( WD1770FDC *fdc ) {
+	WD1770FDD *fdd = wd1770_fdd ( fdc );
+	int64_t offset;
+
+	/* Deassert data interrupt */
+	fdc->status &= ~WD1770_STAT_DRQ;
+	qemu_irq_lower ( fdc->drq );
+
+	/* Read byte into sector buffer and increment offset */
+	fdc->buf[fdc->offset] = fdc->data;
+	fdc->offset++;
+	fdc->remaining--;
+
+	/* If we have not yet reached the end of the sector, reassert
+	 * the data interrupt to request the next byte.
+	 */
+	if ( fdc->remaining ) {
+		fdc->status |= WD1770_STAT_DRQ;
+		qemu_irq_raise ( fdc->drq );
+		return;
+	}
+
+	/* Check that the block device has not been removed since the
+	 * write was initiated, and calculate the block device offset.
+	 */
+	offset = wd1770_offset ( fdc, fdc->sector );
+	if ( offset < 0 ) {
+		fdc->status |= WD1770_STAT_NOT_FOUND;
+		wd1770_done ( fdc, true );
+		return;
+	}
+
+	/* Write the completed sector to the block device */
+	if ( bdrv_pwrite ( fdd->block, offset, fdc->buf,
+			   ( 1 << fdd->sector_size_log2 ) ) < 0 ) {
+		LOG_WD1770 ( "%s: could not write to %s\n",
+			     wd1770_name ( fdc ),
+			     bdrv_get_device_name ( fdd->block ) );
+		fdc->status |= WD1770_STAT_NOT_FOUND;
+		wd1770_done ( fdc, true );
+		return;
+	}
+
+	/* If we are writing multiple sectors, then increment the
+	 * sector register and start writing the next sector.
+	 */
+	if ( fdc->command & WD1770_CMD_MULTIPLE ) {
+		fdc->sector++;
+		wd1770_write_sector ( fdc );
 		return;
 	}
 
@@ -526,6 +600,9 @@ static void wd1770_command_write_sector ( WD1770FDC *fdc ) {
 
 	LOG_WD1770 ( "%s: (0x%02x) write\n", wd1770_name ( fdc ),
 		     fdc->command );
+
+	/* Start writing current sector */
+	wd1770_write_sector ( fdc );
 }
 
 /**
@@ -730,7 +807,7 @@ static uint8_t wd1770_data_read ( WD1770FDC *fdc ) {
 	/* Read data register */
 	data = fdc->data;
 
-	/* If a read operation is in progress, get the next data byte
+	/* If a read operation is in progress, read the next data byte
 	 * into the data register.
 	 */
 	if ( fdc->remaining && ! ( fdc->command & WD1770_CMD_WRITE ) )
@@ -749,6 +826,12 @@ static void wd1770_data_write ( WD1770FDC *fdc, uint8_t data ) {
 
 	/* Write data register */
 	fdc->data = data;
+
+	/* If a write operation is in progress, write this byte from
+	 * the data register.
+	 */
+	if ( fdc->remaining && ( fdc->command & WD1770_CMD_WRITE ) )
+		wd1770_write_next ( fdc );
 }
 
 /**
@@ -860,7 +943,7 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 	// HACK
 	//
 
-#if 1
+#if 0
 	// ADFS / DDFS
 	fdc->fdds[0].single_density = false;
 	fdc->fdds[0].sides = 2;
@@ -868,7 +951,7 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 	fdc->fdds[0].sectors = 16;
 	fdc->fdds[0].sector_size_log2 = 8;
 #endif
-#if 0
+#if 1
 	// DFS single-sided
 	fdc->fdds[0].single_density = true;
 	fdc->fdds[0].sides = 1;
