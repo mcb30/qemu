@@ -27,8 +27,73 @@ typedef struct WD1770FDC WD1770FDC;
 /** Number of drives */
 #define WD1770_DRIVE_COUNT 2
 
-/** Maximum sector size */
-#define WD1770_MAX_SECTOR_SIZE 1024
+/** Drive number to use when no drive is selected */
+#define WD1770_NO_DRIVE -1
+
+/** Assumed maximum track number
+ *
+ * This is a property of the physical drive, rather than the
+ * controller.  It is independent of the maximum track present on the
+ * disk, and so should not be deduced from the size of the disk image
+ * file (if any).  We choose a number that represents a common maximum
+ * track number for physical drives.
+ */
+#define WD1770_MAX_TRACK 83
+
+/** Motor switch-off delay in milliseconds
+ *
+ * The datasheet specifies 9 revolutions at 300rpm => 1800ms
+ */
+#define WD1770_MOTOR_OFF_DELAY_MS 1800
+
+/** Number of raw bytes in a single-density track (approximate)
+ *
+ * Derived from the "recommended single-density format with 128
+ * bytes/sector" example on the datasheet.
+ */
+#define WD1770_TRACK_SIZE_SINGLE 3113
+
+/** Number of raw bytes in a double-density track (approximate)
+ *
+ * Derived from the "recommended double-density format with 256
+ * bytes/sector" example on the datasheet.
+ */
+#define WD1770_TRACK_SIZE_DOUBLE 6168
+
+/** Size of data buffer
+ *
+ * The highest capacity requirement is for a write track operation on
+ * a double density drive.
+ */
+#define WD1770_BUF_SIZE WD1770_TRACK_SIZE_DOUBLE
+
+/** ID address marker byte */
+#define WD1770_ID_ADDRESS_MARK 0xfe
+
+/** Data address marker byte */
+#define WD1770_DATA_ADDRESS_MARK 0xfb
+
+/** ID address mark */
+typedef struct {
+	/** Track number */
+	uint8_t track;
+	/** Side number */
+	uint8_t side;
+	/** Sector number */
+	uint8_t sector;
+	/** Sector size */
+	uint8_t sector_size_128_log2;
+} QEMU_PACKED WD1770IdAddressMark;
+
+/**
+ * Calculate sector size from ID address mark
+ *
+ * @v id		ID address mark
+ * @ret sector_size	Sector size
+ */
+static inline unsigned int wd1770_sector_size ( WD1770IdAddressMark *id ) {
+	return ( 128 << id->sector_size_128_log2 );
+}
 
 /** 1770 FDC attached drive */
 typedef struct {
@@ -45,7 +110,7 @@ typedef struct {
 	/** Number of sectors per track on media */
 	uint8_t sectors;
 	/** Sector size of media */
-	uint16_t sector_size_log2;
+	uint16_t sector_size;
 
 	/** Current track position (may exceed limit of block device) */
 	uint8_t track;
@@ -74,6 +139,7 @@ struct WD1770FDC {
 	uint8_t side;
 	/** Selected density */
 	bool single_density;
+
 	/** Command register */
 	uint8_t command;
 	/** Status register */
@@ -88,10 +154,10 @@ struct WD1770FDC {
 	int8_t step;
 	/** Interrupt is forced on */
 	bool forced_intrq;
-	/** Offset within sector buffer */
-	uint16_t offset;
-	/** Size of sector buffer */
-	uint16_t remaining;
+	/** Offset within current operation */
+	uint32_t offset;
+	/** Data bytes remaining within current operation */
+	uint32_t remaining;
 };
 
 /** Size of memory region */
@@ -123,25 +189,6 @@ struct WD1770FDC {
 #define WD1770_STAT_DELETED_DATA 0x20
 #define WD1770_STAT_PROTECTED 0x40
 #define WD1770_STAT_MOTOR_ON 0x80
-
-/** Drive number to use when no drive is selected */
-#define WD1770_NO_DRIVE -1
-
-/** Assumed maximum track number
- *
- * This is a property of the physical drive, rather than the
- * controller.  It is independent of the maximum track present on the
- * disk, and so should not be deduced from the size of the disk image
- * file (if any).  We choose a number that represents a common maximum
- * track number for physical drives.
- */
-#define WD1770_MAX_TRACK 83
-
-/** Motor switch-off delay in milliseconds
- *
- * The datasheet specifies 9 revolutions at 300rpm => 1800ms
- */
-#define WD1770_MOTOR_OFF_DELAY_MS 1800
 
 extern void wd1770_reset ( WD1770FDC *fdc );
 extern void wd1770_set_drive ( WD1770FDC *fdc, int drive );
