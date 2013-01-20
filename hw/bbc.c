@@ -23,8 +23,18 @@
 #include "sysemu/sysemu.h"
 #include "ui/console.h"
 #include "char/char.h"
+#include "block/block_int.h"
 #include "loader.h"
 #include "bbc.h"
+
+#define DEBUG_BBC 1
+
+/* Debug messages */
+#define LOG_BBC( ... ) do {						\
+		if ( DEBUG_BBC ) {					\
+			qemu_log_mask ( CPU_LOG_IOPORT, __VA_ARGS__ );	\
+		}							\
+	} while ( 0 )
 
 /**
  * Get device name for log messages
@@ -324,8 +334,7 @@ static void bbc_paged_rom_update_alias ( BBCPagedROM *paged ) {
 	/* Change offset address into paged ROM virtual memory region */
 	offset = bbc_paged_rom_offset ( paged, paged->page );
 	memory_region_set_alias_offset ( &paged->rom, offset );
-	qemu_log_mask ( CPU_LOG_IOPORT, "%s: ROM %d activated\n",
-			paged->name, paged->page );
+	LOG_BBC ( "%s: ROM %d activated\n", paged->name, paged->page );
 }
 
 /**
@@ -732,16 +741,14 @@ static void bbc_video_ula_control_write ( BBCVideoULA *ula, uint8_t data ) {
 	ula->pixel_clock_log2 = ( ( ( data >> 2 ) & 0x03 ) + 1 );
 	ula->teletext = ( ( data >> 1 ) & 0x01 );
 	ula->flash = ( ( data >> 0 ) & 0x01 );
-	qemu_log_mask ( CPU_LOG_IOPORT, "%s: cursor mask %c%c%c%c CRTC %dMHz "
-			"pixel %dMHz%s%s\n", ula->name,
-			( ( ula->cursor_mask & 0x01 ) ? 'X' : '-' ),
-			( ( ula->cursor_mask & 0x02 ) ? 'X' : '-' ),
-			( ( ula->cursor_mask & 0x04 ) ? 'X' : '-' ),
-			( ( ula->cursor_mask & 0x08 ) ? 'X' : '-' ),
-			( 1 << ula->crtc_clock_log2 ),
-			( 1 << ula->pixel_clock_log2 ),
-			( ula->teletext ? " teletext" : "" ),
-			( ula->flash ? " flash" : "" ) );
+	LOG_BBC ( "%s: cursor mask %c%c%c%c CRTC %dMHz pixel %dMHz%s%s\n",
+		  ula->name, ( ( ula->cursor_mask & 0x01 ) ? 'X' : '-' ),
+		  ( ( ula->cursor_mask & 0x02 ) ? 'X' : '-' ),
+		  ( ( ula->cursor_mask & 0x04 ) ? 'X' : '-' ),
+		  ( ( ula->cursor_mask & 0x08 ) ? 'X' : '-' ),
+		  ( 1 << ula->crtc_clock_log2 ), ( 1 << ula->pixel_clock_log2 ),
+		  ( ula->teletext ? " teletext" : "" ),
+		  ( ula->flash ? " flash" : "" ) );
 
 	/* Call update notification functions */
 	bbc_video_ula_updated ( ula );
@@ -761,8 +768,8 @@ static void bbc_video_ula_palette_write ( BBCVideoULA *ula, uint8_t data ) {
 	logical = ( ( data >> 4 ) & 0x0f );
 	actual = ( ( data >> 0 ) & 0x0f );
 	ula->palette[logical] = actual;
-	qemu_log_mask ( CPU_LOG_IOPORT, "%s: logical colour &%x maps to actual "
-			"colour &%x\n", ula->name, logical, actual );
+	LOG_BBC ( "%s: logical colour &%x maps to actual colour &%x\n",
+		  ula->name, logical, actual );
 }
 
 /**
@@ -1129,8 +1136,8 @@ static void bbc_keyboard_event ( void *opaque, int keycode ) {
 	via->keys_pressed[key->column] &= ~( 1 << key->row );
 	if ( pressed )
 		via->keys_pressed[key->column] |= ( 1 << key->row );
-	qemu_log_mask ( CPU_LOG_IOPORT, "%s: key %s %s\n", via->name,
-			key->name, ( pressed ? "pressed" : "released" ) );
+	LOG_BBC ( "%s: key %s %s\n", via->name, key->name,
+		  ( pressed ? "pressed" : "released" ) );
 
 	/* Update keyboard interrupt line */
 	bbc_keyboard_update_irq ( via );
@@ -1152,8 +1159,8 @@ static int bbc_keyboard_pressed ( BBCSystemVIA *via ) {
 	column = bbc_keyboard_column ( via );
 	pressed = ( via->keys_pressed[column] & ( 1 << row ) );
 
-	qemu_log_mask ( CPU_LOG_IOPORT, "BBC: keyboard column %d row %d %s\n",
-			column, row, ( pressed ? "pressed" : "not pressed" ) );
+	LOG_BBC ( "BBC: keyboard column %d row %d %s\n",
+		  column, row, ( pressed ? "pressed" : "not pressed" ) );
 	return pressed;
 }
 
@@ -1171,9 +1178,9 @@ static void bbc_keyboard_leds ( BBCSystemVIA *via ) {
 	ledstate = ( ( caps_lock ? QEMU_CAPS_LOCK_LED : 0 ) |
 		     ( shift_lock ? QEMU_NUM_LOCK_LED : 0 ) );
 	kbd_put_ledstate ( ledstate );
-	qemu_log_mask ( CPU_LOG_IOPORT, "BBC: keyboard leds %s %s\n",
-			( caps_lock ? "CAPSLOCK" : "capslock" ),
-			( shift_lock ? "SHIFTLOCK" : "shiftlock" ) );
+	LOG_BBC ( "BBC: keyboard leds %s %s\n",
+		  ( caps_lock ? "CAPSLOCK" : "capslock" ),
+		  ( shift_lock ? "SHIFTLOCK" : "shiftlock" ) );
 }
 
 /**
@@ -1282,10 +1289,9 @@ static void bbc_addressable_latch_write ( void *opaque, uint8_t data ) {
 	latch_data = ( ( data >> 3 ) & 0x01 );
 	via->addressable_latch &= ~( 1 << latch_address );
 	via->addressable_latch |= ( latch_data << latch_address );
-	qemu_log_mask ( CPU_LOG_IOPORT, "%s: addressable latch now &%02X "
-			"(bit %d %s %s)\n", via->name, via->addressable_latch,
-			latch_address, names[latch_address],
-			( latch_data ? "high" : "low" ) );
+	LOG_BBC ( "%s: addressable latch now &%02X bit %d %s %s)\n",
+		  via->name, via->addressable_latch, latch_address,
+		  names[latch_address],	( latch_data ? "high" : "low" ) );
 
 	/* Handle write events */
 	switch ( latch_address ) {
@@ -1397,8 +1403,8 @@ static void bbc_parallel_strobe ( void *opaque, int n, int level ) {
 	if ( ! level )
 		return;
 	
-	qemu_log_mask ( CPU_LOG_IOPORT, "%s: print character &%02x '%c'\n",
-			via->name, data, ( isprint ( data ) ? data : '.' ) );
+	LOG_BBC ( "%s: print character &%02x '%c'\n", via->name, data,
+		  ( isprint ( data ) ? data : '.' ) );
 
 	/* Send data to parallel port, if connected */
 	if ( parallel->chr ) {
@@ -1475,6 +1481,88 @@ static BBCUserVIA * bbc_user_via_init ( hwaddr addr, uint64_t size,
  */
 
 /**
+ * Guess disk geometry
+ *
+ * @v opaque		1770 FDC
+ * @v fdd		FDD
+ * @ret rc		Return status
+ */
+static int bbc_1770_fdc_guess_geometry ( void *opaque, WD1770FDD *fdd ) {
+	BBC1770FDC *fdc = opaque;
+	static const uint8_t try_tracks[] = { 80, 40 };
+	static const uint8_t try_sides[] = { 2, 1 };
+	static const uint8_t try_sectors[] = { 18, 16, 10 };
+	char *filename;
+	char *suffix;
+	int64_t length;
+	unsigned int cyl_size;
+	unsigned int i;
+	unsigned int j;
+	unsigned int k;
+
+	/* Get size of block device */
+	length = bdrv_getlength ( fdd->block );
+	if ( length < 0 ) {
+		LOG_BBC ( "%s: could not determine length for %s\n",
+			  fdc->name, bdrv_get_device_name ( fdd->block ) );
+		return -1;
+	}
+
+	/* Determine file suffix, if any */
+	filename = fdd->block->filename;
+	if ( filename ) {
+		suffix = strrchr ( filename, '.' );
+		if ( suffix )
+			suffix++;
+	} else {
+		suffix = NULL;
+	}
+
+	/* Treat ".ssd" and ".dsd" filename suffixes as being in the
+	 * standard single-density format common to downloadable
+	 * images.
+	 */
+	if ( suffix && ( ( strcasecmp ( suffix, "ssd" ) == 0 ) ||
+			 ( strcasecmp ( suffix, "dsd" ) == 0 ) ) ) {
+		fdd->single_density = true;
+		fdd->sides = ( ( tolower ( suffix[0] ) == 's' ) ? 1 : 2 );
+		fdd->sectors = BBC_DFS_SECTORS;
+		fdd->sector_size = BBC_DFS_SECTOR_SIZE;
+		cyl_size = ( fdd->sides * fdd->sectors * fdd->sector_size );
+		fdd->tracks = ( ( length + cyl_size - 1 ) / cyl_size );
+		return 0;
+	}
+
+	/* Otherwise, try various standard geometry combinations to
+	 * see if one matches the size.
+	 */
+	fdd->sector_size = BBC_DFS_SECTOR_SIZE;
+	for ( i = 0 ; i < ARRAY_SIZE ( try_tracks ) ; i++ ) {
+		fdd->tracks = try_tracks[i];
+		for ( j = 0 ; j < ARRAY_SIZE ( try_sides ) ; j++ ) {
+			fdd->sides = try_sides[j];
+			for ( k = 0 ; k < ARRAY_SIZE ( try_sectors ) ; k++ ) {
+				fdd->sectors = try_sectors[k];
+				fdd->single_density =
+					( fdd->sectors == BBC_DFS_SECTORS );
+				if ( ( fdd->sides * fdd->tracks *
+				       fdd->sectors * fdd->sector_size )
+				     == length ) {
+					return 0;
+				}
+			}
+		}
+	}
+
+	return -1;
+}
+
+/** 1770 FDC 1770 operations */
+static WD1770Ops bbc_1770_fdc_1770_ops = {
+	.guess_geometry = bbc_1770_fdc_guess_geometry,
+};
+
+/**
  * Read from 1770 FDC control register
  *
  * @v opaque		1770 FDC
@@ -1508,8 +1596,8 @@ static void bbc_1770_fdc_write ( void *opaque, hwaddr addr, uint64_t data64,
 
 	/* Write to control register */
 	fdc->control = data;
-	qemu_log_mask ( CPU_LOG_IOPORT, "%s: control register (&%02lX) set to "
-			"&%02X\n", fdc->name, addr, data );
+	LOG_BBC ( "%s: control register (&%02lX) set to &%02X\n",
+		  fdc->name, addr, data );
 
 	/* Select drive number */
 	switch ( data & BBC_1770_FDC_DRIVE_MASK ) {
@@ -1598,6 +1686,7 @@ static BBC1770FDC * bbc_1770_fdc_init ( hwaddr addr, uint64_t size,
 		fds[i] = drive_get ( IF_FLOPPY, 0, i );
 	fdc->fdc = wd1770_init ( ( addr + BBC_1770_FDC_WD1770_OFFSET ),
 				 drq, intrq, fds );
+	wd1770_set_ops ( fdc->fdc, &bbc_1770_fdc_1770_ops, fdc );
 
 	/* Register memory region */
 	memory_region_init_io ( &fdc->mr, &bbc_1770_fdc_ops, fdc, fdc->name,

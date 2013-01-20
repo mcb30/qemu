@@ -50,6 +50,20 @@ static inline const char * wd1770_name ( WD1770FDC *fdc ) {
 }
 
 /**
+ * Set device operations
+ *
+ * @v fdc		1770 FDC
+ * @v ops		Floppy disk operations
+ * @v opaque		Opaque pointer
+ */
+void wd1770_set_ops ( WD1770FDC *fdc, WD1770Ops *ops, void *opaque ) {
+
+	/* Set operations */
+	fdc->ops = ops;
+	fdc->opaque = opaque;
+}
+
+/**
  * Issue command
  *
  * @v fdc		1770 FDC
@@ -147,6 +161,9 @@ static void wd1770_motor_on ( WD1770FDC *fdc ) {
  * @v fdc		1770 FDC
  */
 static void wd1770_motor_off ( WD1770FDC *fdc ) {
+
+	/* Cancel motor-off timer, if running */
+	qemu_del_timer ( fdc->motor_off_timer );
 
 	/* Mark motor as off */
 	fdc->status &= ~WD1770_STAT_MOTOR_ON;
@@ -249,14 +266,104 @@ void wd1770_reset ( WD1770FDC *fdc ) {
  */
 static WD1770FDD * wd1770_fdd ( WD1770FDC *fdc ) {
 	int drive = fdc->drive;
+	WD1770FDD *fdd;
 
-	/* Return drive if drive number is valid and block device exists */
-	if ( ( drive >= 0 ) && ( drive < ARRAY_SIZE ( fdc->fdds ) ) &&
-	     ( fdc->fdds[drive].block != NULL ) ) {
-		return &fdc->fdds[drive];
-	} else {
+	/* Check that drive number is valid */
+	if ( ( drive < 0 ) || ( drive >= ARRAY_SIZE ( fdc->fdds ) ) ) {
+		LOG_WD1770 ( "%s: invalid drive %d\n", wd1770_name ( fdc ),
+			     drive );
 		return NULL;
 	}
+	fdd = &fdc->fdds[drive];
+
+	/* Check that a block device is attached */
+	if ( ! fdd->block ) {
+		LOG_WD1770 ( "%s: no block device attached to drive %d\n",
+			     wd1770_name ( fdc ), drive );
+		return NULL;
+	}
+
+	/* Check that media is present */
+	if ( ! bdrv_is_inserted ( fdd->block ) ) {
+		LOG_WD1770 ( "%s: no media present in %s\n",
+			     wd1770_name ( fdc ),
+			     bdrv_get_device_name ( fdd->block ) );
+		return NULL;
+	}
+
+	/* Guess disk geometry if necessary */
+	if ( fdd->sides == 0 ) {
+		if ( ! ( fdc->ops && fdc->ops->guess_geometry ) ) {
+			LOG_WD1770 ( "%s: no way to guess geometry for %s\n",
+				     wd1770_name ( fdc ),
+				     bdrv_get_device_name ( fdd->block ) );
+			return NULL;
+		}
+		if ( fdc->ops->guess_geometry ( fdc->opaque, fdd ) < 0 ) {
+			LOG_WD1770 ( "%s: could not guess geometry for %s\n",
+				     wd1770_name ( fdc ),
+				     bdrv_get_device_name ( fdd->block ) );
+			/* Ensure geometry is left invalid */
+			fdd->sides = 0;
+			return NULL;
+		}
+		LOG_WD1770 ( "%s: %s guessed as %s-density, %d side(s), %d "
+			     "tracks, %d sectors of %d bytes\n",
+			     wd1770_name ( fdc ),
+			     bdrv_get_device_name ( fdd->block ),
+			     ( fdd->single_density ? "single" : "double" ),
+			     fdd->sides, fdd->tracks, fdd->sectors,
+			     fdd->sector_size );
+	}
+
+	return fdd;
+}
+
+/**
+ * Handle block device media change
+ *
+ * @v opaque		1770 FDD
+ * @v load		Media is loaded
+ */
+static void wd1770_change_media_cb ( void *opaque, bool load ) {
+	WD1770FDD *fdd = opaque;
+	WD1770FDC *fdc = fdd->fdc;
+	int drive;
+
+	/* Calculate drive number */
+	drive = ( fdd - fdc->fdds );
+	LOG_WD1770 ( "%s: media for drive %d %s\n", wd1770_name ( fdc ),
+		     drive, ( load ? "inserted" : "removed" ) );
+
+	/* If any operation is in progress on this drive, terminate it
+	 * and switch off the motor.
+	 */
+	if ( ( fdc->status & WD1770_STAT_BUSY ) && ( drive == fdc->drive ) ) {
+		wd1770_done ( fdc, true );
+		wd1770_motor_off ( fdc );
+	}
+
+	/* Mark geometry as invalid */
+	fdd->sides = 0;
+}
+
+/**
+ * Handle block device resizing
+ *
+ * @v opaque		1770 FDD
+ */
+static void wd1770_resize_cb ( void *opaque ) {
+	WD1770FDD *fdd = opaque;
+	WD1770FDC *fdc = fdd->fdc;
+	int drive;
+
+	/* Calculate drive number */
+	drive = ( fdd - fdc->fdds );
+	LOG_WD1770 ( "%s: media for drive %d resized\n",
+		     wd1770_name ( fdc ), drive );
+
+	/* Mark geometry as invalid */
+	fdd->sides = 0;
 }
 
 /**
@@ -278,8 +385,8 @@ static int64_t wd1770_offset ( WD1770FDC *fdc, uint8_t sector ) {
 	/* Check if drive exists */
 	fdd = wd1770_fdd ( fdc );
 	if ( ! fdd ) {
-		LOG_WD1770 ( "%s: track %d.%d sector %d not found: no drive "
-			     "selected\n", wd1770_name ( fdc ), fdc->track,
+		LOG_WD1770 ( "%s: track %d.%d sector %d not found\n",
+			     wd1770_name ( fdc ), fdc->track,
 			     fdc->side, sector );
 		return -1;
 	}
@@ -442,7 +549,7 @@ static void wd1770_seek ( WD1770FDC *fdc, int track_phys_delta,
 		     wd1770_name ( fdc ), fdc->track, fdc->side,
 		     ( fdd ? fdd->track : -1 ),
 		     ( fdd ? ( ( fdd->track == fdc->track ) ?
-			       "" : " mismatch" ) : " no drive" ) );
+			       "" : " mismatch" ) : " invalid" ) );
 
 	/* Indicate whether or not physical head is on track 0 */
 	if ( ( fdd != NULL ) && ( fdd->track == 0 ) )
@@ -1354,6 +1461,12 @@ static const MemoryRegionOps wd1770_ops = {
 	.write = wd1770_write,
 };
 
+/** 1770 FDC block device operations */
+static const BlockDevOps wd1770_block_ops = {
+	.change_media_cb = wd1770_change_media_cb,
+	.resize_cb = wd1770_resize_cb,
+};
+
 /**
  * Initialise 1770 FDC system bus device
  *
@@ -1361,6 +1474,7 @@ static const MemoryRegionOps wd1770_ops = {
  */
 static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 	WD1770FDC *fdc = DO_UPCAST ( WD1770FDC, busdev, busdev );
+	WD1770FDD *fdd;
 	unsigned int i;
 
 	/* Initialise FDC */
@@ -1374,7 +1488,10 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 
 	/* Initialise drives */
 	for ( i = 0 ; i < ARRAY_SIZE ( fdc->fdds ) ; i++ ) {
-		fdc->fdds[i].fdc = fdc;
+		fdd = &fdc->fdds[i];
+		fdd->fdc = fdc;
+		if ( fdd->block )
+			bdrv_set_dev_ops ( fdd->block, &wd1770_block_ops, fdd );
 	}
 
 	/* Initialise memory region */
@@ -1388,28 +1505,6 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 
 	/* Reset device */
 	wd1770_reset ( fdc );
-
-	//
-	// HACK
-	//
-
-#if 0
-	// ADFS / DDFS
-	fdc->fdds[0].single_density = false;
-	fdc->fdds[0].sides = 2;
-	fdc->fdds[0].tracks = 80;
-	fdc->fdds[0].sectors = 16;
-	fdc->fdds[0].sector_size = 256;
-#endif
-#if 1
-	// DFS single-sided
-	fdc->fdds[0].single_density = true;
-	fdc->fdds[0].sides = 1;
-	fdc->fdds[0].tracks = 80;
-	fdc->fdds[0].sectors = 10;
-	fdc->fdds[0].sector_size = 256;
-#endif
-
 
 	return 0;
 }

@@ -93,7 +93,7 @@ static inline unsigned int wd1770_sector_size ( WD1770IdAddressMark *id ) {
  *
  * Some programs (e.g. disk formatters) don't cope properly if the
  * virtual hardware runs with essentially zero seek times.  Slow down
- * some operations by delaying the start of each command.
+ * operations by delaying the start of each command.
  */
 #define WD1770_CMD_DELAY_NS 1000
 
@@ -101,8 +101,8 @@ static inline unsigned int wd1770_sector_size ( WD1770IdAddressMark *id ) {
  *
  * Some programs (e.g. disk formatters) don't cope properly if the
  * virtual hardware runs with essentially zero time between each data
- * byte.  Slow down some operations by delaying each individual data
- * request.
+ * byte.  Slow down some (not all) operations by delaying each
+ * individual data request.
  */
 #define WD1770_DRQ_DELAY_NS 1
 
@@ -133,6 +133,12 @@ typedef struct {
 	uint8_t track;
 } WD1770FDD;
 
+/** 1770 FDC operations */
+typedef struct {
+	/** Guess geometry */
+	int ( * guess_geometry ) ( void *opaque, WD1770FDD *fdd );
+} WD1770Ops;
+
 /** 1770 FDC */
 struct WD1770FDC {
 	/** System bus device */
@@ -153,6 +159,10 @@ struct WD1770FDC {
 	QEMUTimer *drq_timer;
 	/** Motor switch-off timer */
 	QEMUTimer *motor_off_timer;
+	/** Operations */
+	WD1770Ops *ops;
+	/** Opaque pointer for operations */
+	void *opaque;
 
 	/** Selected drive (negative for no drive) */
 	int8_t drive;
@@ -215,6 +225,7 @@ extern void wd1770_reset ( WD1770FDC *fdc );
 extern void wd1770_set_drive ( WD1770FDC *fdc, int drive );
 extern void wd1770_set_side ( WD1770FDC *fdc, unsigned int side );
 extern void wd1770_set_single_density ( WD1770FDC *fdc, bool single_density );
+extern void wd1770_set_ops ( WD1770FDC *fdc, WD1770Ops *ops, void *opaque );
 extern WD1770FDC * wd1770_init ( hwaddr addr, qemu_irq drq, qemu_irq intrq,
 				 DriveInfo **fds );
 

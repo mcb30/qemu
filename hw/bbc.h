@@ -106,6 +106,10 @@
 #define BBC_1770_FDC_SINGLE_DENSITY 0x08
 #define BBC_1770_FDC_NOT_MASTER_RESET 0x20
 
+/* DFS standard disc layout */
+#define BBC_DFS_SECTORS 10
+#define BBC_DFS_SECTOR_SIZE 256
+
 /* Analogue to digital converter */
 #define BBC_ADC_SIZE 0x04
 #define BBC_ADC_START 0x00
