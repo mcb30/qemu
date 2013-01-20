@@ -40,12 +40,6 @@ typedef struct WD1770FDC WD1770FDC;
  */
 #define WD1770_MAX_TRACK 83
 
-/** Motor switch-off delay in milliseconds
- *
- * The datasheet specifies 9 revolutions at 300rpm => 1800ms
- */
-#define WD1770_MOTOR_OFF_DELAY_MS 1800
-
 /** Number of raw bytes in a single-density track (approximate)
  *
  * Derived from the "recommended single-density format with 128
@@ -95,6 +89,29 @@ static inline unsigned int wd1770_sector_size ( WD1770IdAddressMark *id ) {
 	return ( 128 << id->sector_size_128_log2 );
 }
 
+/** Per-byte data request delay in nanoseconds
+ *
+ * Some programs (e.g. disk formatters) don't cope properly if the
+ * virtual hardware runs with essentially zero time between each data
+ * byte.  Slow down some operations by delaying each individual data
+ * request.
+ */
+#define WD1770_DRQ_BYTE_DELAY_NS 1
+
+/** Long data request delay in nanoseconds
+ *
+ * Some programs (e.g. disk formatters) don't cope properly if the
+ * virtual hardware runs with essentially zero seek times.  Slow down
+ * some operations by delaying the first data request.
+ */
+#define WD1770_DRQ_SEEK_DELAY_NS 1000
+
+/** Motor switch-off delay in milliseconds
+ *
+ * The datasheet specifies 9 revolutions at 300rpm => 1800ms
+ */
+#define WD1770_MOTOR_OFF_DELAY_MS 1800
+
 /** 1770 FDC attached drive */
 typedef struct {
 	/** Controller */
@@ -130,8 +147,10 @@ struct WD1770FDC {
 	WD1770FDD fdds[WD1770_DRIVE_COUNT];
 	/** Sector buffer */
 	uint8_t *buf;
+	/** Data request timer */
+	QEMUTimer *drq_timer;
 	/** Motor switch-off timer */
-	QEMUTimer *motor_off;
+	QEMUTimer *motor_off_timer;
 
 	/** Selected drive (negative for no drive) */
 	int8_t drive;

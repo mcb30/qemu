@@ -47,6 +47,154 @@ static inline const char * wd1770_name ( WD1770FDC *fdc ) {
 }
 
 /**
+ * Request next data byte
+ *
+ * @v fdc		1770 FDC
+ */
+static inline void wd1770_drq ( WD1770FDC *fdc ) {
+
+	/* Assert data interrupt */
+	fdc->status |= WD1770_STAT_DRQ;
+	qemu_irq_raise ( fdc->drq );	
+}
+
+/**
+ * Start data request timer for next data byte
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_drq_delayed ( WD1770FDC *fdc, int64_t delay ) {
+	int64_t drq_time_ns;
+
+	/* Start timer to request next data byte */
+	drq_time_ns = ( qemu_get_clock_ns ( vm_clock ) + delay );
+	qemu_mod_timer ( fdc->drq_timer, drq_time_ns );
+}
+
+/**
+ * Request next data byte upon data request timer expiry
+ *
+ * @v opaque		1770 FDC
+ */
+static void wd1770_drq_expired ( void *opaque ) {
+	WD1770FDC *fdc = opaque;
+
+	/* Assert data interrupt */
+	wd1770_drq ( fdc );
+}
+
+/**
+ * Turn on motor
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_motor_on ( WD1770FDC *fdc ) {
+
+	/* Cancel motor-off timer, if running */
+	qemu_del_timer ( fdc->motor_off_timer );
+
+	/* Mark motor as on */
+	fdc->status |= WD1770_STAT_MOTOR_ON;
+}
+
+/**
+ * Turn off motor
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_motor_off ( WD1770FDC *fdc ) {
+
+	/* Mark motor as off */
+	fdc->status &= ~WD1770_STAT_MOTOR_ON;
+}
+
+/**
+ * Start timer to turn off motor
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_motor_off_delayed ( WD1770FDC *fdc ) {
+	int64_t motor_off_time_ms;
+
+	/* Start timer to switch off motor (if currently on) */
+	if ( fdc->status & WD1770_STAT_MOTOR_ON ) {
+		motor_off_time_ms = ( qemu_get_clock_ms ( vm_clock ) +
+				      WD1770_MOTOR_OFF_DELAY_MS );
+		qemu_mod_timer ( fdc->motor_off_timer, motor_off_time_ms );
+	}
+}
+
+/**
+ * Turn off motor upon motor timer expiry
+ *
+ * @v opaque		1770 FDC
+ */
+static void wd1770_motor_off_expired ( void *opaque ) {
+	WD1770FDC *fdc = opaque;
+
+	/* Turn off motor */
+	wd1770_motor_off ( fdc );
+}
+
+/**
+ * Complete operation
+ *
+ * @v fdc		1770 FDC
+ * @v intrq		Generate completion interrupt
+ */
+static void wd1770_done ( WD1770FDC *fdc, bool intrq ) {
+
+	/* Stop DRQ timer, clear busy and DRQ flags, and deassert data
+	 * interrupt.
+	 */
+	qemu_del_timer ( fdc->drq_timer );
+	fdc->status &= ~( WD1770_STAT_BUSY | WD1770_STAT_DRQ );
+	qemu_irq_lower ( fdc->drq );
+
+	/* Mark any ongoing operation as complete */
+	fdc->remaining = 0;
+
+	/* Start timer to switch off motor (if currently on) */
+	wd1770_motor_off_delayed ( fdc );
+
+	/* Assert completion interrupt, if applicable */
+	if ( intrq )
+		qemu_irq_raise ( fdc->intrq );
+}
+
+/**
+ * Reset controller
+ *
+ * @v fdc		1770 FDC
+ * @v drive		Drive number
+ *
+ * The reset line may be under software control, to allow the
+ * controller to be reset in the event of an error.
+ */
+void wd1770_reset ( WD1770FDC *fdc ) {
+
+	LOG_WD1770 ( "%s: reset\n", wd1770_name ( fdc ) );
+
+	/* Cancel any ongoing operation */
+	wd1770_done ( fdc, false );
+
+	/* Reset registers (excluding those provided by external sources) */
+	fdc->command = 0;
+	fdc->status = 0;
+	fdc->track = 0;
+	fdc->sector = 0;
+	fdc->data = 0;
+	fdc->step = +1;
+	fdc->forced_intrq = false;
+	fdc->offset = 0;
+	fdc->remaining = 0;
+
+	/* Deassert interrupts */
+	qemu_irq_lower ( fdc->drq );
+	qemu_irq_lower ( fdc->intrq );
+}
+
+/**
  * Get currently selected drive
  *
  * @v fdc		1770 FDC
@@ -76,11 +224,12 @@ static WD1770FDD * wd1770_fdd ( WD1770FDC *fdc ) {
  * byte offset to the start of the sector.
  */
 static int64_t wd1770_offset ( WD1770FDC *fdc, uint8_t sector ) {
-	WD1770FDD *fdd = wd1770_fdd ( fdc );
+	WD1770FDD *fdd;
 	unsigned int lba;
 	int64_t offset;
 
 	/* Check if drive exists */
+	fdd = wd1770_fdd ( fdc );
 	if ( ! fdd ) {
 		LOG_WD1770 ( "%s: track %d.%d sector %d not found: no drive "
 			     "selected\n", wd1770_name ( fdc ), fdc->track,
@@ -156,47 +305,6 @@ static int64_t wd1770_offset ( WD1770FDC *fdc, uint8_t sector ) {
 }
 
 /**
- * Reset controller
- *
- * @v fdc		1770 FDC
- * @v drive		Drive number
- *
- * The reset line may be under software control, to allow the
- * controller to be reset in the event of an error.
- */
-void wd1770_reset ( WD1770FDC *fdc ) {
-
-	LOG_WD1770 ( "%s: reset\n", wd1770_name ( fdc ) );
-
-	/* Reset registers (excluding those provided by external sources) */
-	fdc->command = 0;
-	fdc->status = 0;
-	fdc->track = 0;
-	fdc->sector = 0;
-	fdc->data = 0;
-	fdc->step = +1;
-	fdc->forced_intrq = false;
-	fdc->offset = 0;
-	fdc->remaining = 0;
-
-	/* Deassert interrupts */
-	qemu_irq_lower ( fdc->drq );
-	qemu_irq_lower ( fdc->intrq );
-}
-
-/**
- * Turn off motor
- *
- * @v opaque		1770 FDC
- */
-static void wd1770_motor_off ( void *opaque ) {
-	WD1770FDC *fdc = opaque;
-
-	/* Turn off motor */
-	fdc->status &= ~WD1770_STAT_MOTOR_ON;
-}
-
-/**
  * Set currently selected drive
  *
  * @v fdc		1770 FDC
@@ -206,11 +314,10 @@ static void wd1770_motor_off ( void *opaque ) {
  * information must be provided externally.
  */
 void wd1770_set_drive ( WD1770FDC *fdc, int drive ) {
-	WD1770FDD *fdd;
+	WD1770FDD *fdd = wd1770_fdd ( fdc );
 
 	/* Record drive */
 	fdc->drive = drive;
-	fdd = wd1770_fdd ( fdc );
 	LOG_WD1770 ( "%s: drive=%d (%s)\n", wd1770_name ( fdc ), drive,
 		     ( ( drive < 0 ) ? "<unselected>" :
 		       ( fdd ? bdrv_get_device_name ( fdd->block ) :
@@ -253,34 +360,6 @@ void wd1770_set_single_density ( WD1770FDC *fdc, bool single_density ) {
 }
 
 /**
- * Complete operation
- *
- * @v fdc		1770 FDC
- * @v intrq		Generate completion interrupt
- */
-static void wd1770_done ( WD1770FDC *fdc, bool intrq ) {
-	int64_t motor_off_time_ms;
-
-	/* Mark any ongoing operation as complete */
-	fdc->remaining = 0;
-
-	/* Clear busy and DRQ flags, and deassert data interrupt */
-	fdc->status &= ~( WD1770_STAT_BUSY | WD1770_STAT_DRQ );
-	qemu_irq_lower ( fdc->drq );
-
-	/* Start timer to switch off motor (if currently on) */
-	if ( fdc->status & WD1770_STAT_MOTOR_ON ) {
-		motor_off_time_ms = ( qemu_get_clock_ms ( vm_clock ) +
-				      WD1770_MOTOR_OFF_DELAY_MS );
-		qemu_mod_timer ( fdc->motor_off, motor_off_time_ms );
-	}
-
-	/* Assert completion interrupt, if applicable */
-	if ( intrq )
-		qemu_irq_raise ( fdc->intrq );
-}
-
-/**
  * Seek to a new track
  *
  * @v fdc		1770 FDC
@@ -293,8 +372,10 @@ static void wd1770_seek ( WD1770FDC *fdc, int track_phys_delta,
 	int new_track_phys;
 
 	/* Switch on motor if instructed to do so */
-	if ( ! ( fdc->command & WD1770_CMD_DISABLE_SPIN_UP ) )
-		fdc->status |= ( WD1770_STAT_MOTOR_ON | WD1770_STAT_SPUN_UP );
+	if ( ! ( fdc->command & WD1770_CMD_DISABLE_SPIN_UP ) ) {
+		wd1770_motor_on ( fdc );
+		fdc->status |= WD1770_STAT_SPUN_UP;
+	}
 
 	/* Calculate new physical track, limited to maximum track
 	 * supported by the drive (not the disk).
@@ -338,14 +419,14 @@ static void wd1770_seek ( WD1770FDC *fdc, int track_phys_delta,
  * @v fdc		1770 FDC
  */
 static void wd1770_read_sector ( WD1770FDC *fdc ) {
-	WD1770FDD *fdd = wd1770_fdd ( fdc );
+	WD1770FDD *fdd;
 	int64_t offset;
 
 	/* Switch on motor.  Do this unconditionally, ignoring the
 	 * WD1770_CMD_DISABLE_SPIN_UP bit since this bit has a
 	 * different meaning on WD1773.
 	 */
-	fdc->status |= WD1770_STAT_MOTOR_ON;
+	wd1770_motor_on ( fdc );
 
 	/* Check that sector can be found, and calculate the block
 	 * device offset.
@@ -360,9 +441,10 @@ static void wd1770_read_sector ( WD1770FDC *fdc ) {
 	/* At this point, we know that we have a block device since
 	 * the offset calculation succeeded.
 	 */
+	fdd = wd1770_fdd ( fdc );
 	assert ( fdd != NULL );
 
-	/* Read data into sector buffer */
+	/* Read data into data buffer */
 	if ( bdrv_pread ( fdd->block, offset, fdc->buf,
 			  fdd->sector_size ) < 0 ) {
 		LOG_WD1770 ( "%s: could not read from %s\n",
@@ -377,10 +459,9 @@ static void wd1770_read_sector ( WD1770FDC *fdc ) {
 	fdc->offset = 0;
 	fdc->remaining = fdd->sector_size;
 
-	/* Place first byte in data register and assert data interrupt */
+	/* Place first byte in data register and issue data request */
 	fdc->data = fdc->buf[0];
-	fdc->status |= WD1770_STAT_DRQ;
-	qemu_irq_raise ( fdc->drq );
+	wd1770_drq ( fdc );
 }
 
 /**
@@ -399,13 +480,12 @@ static void wd1770_read_sector_next ( WD1770FDC *fdc ) {
 	fdc->remaining--;
 
 	/* If we have not yet reached the end of the sector, place the
-	 * next byte into the data register and return, reasserting
-	 * the data interrupt.
+	 * next byte into the data register, reissue data request, and
+	 * return.
 	 */
 	if ( fdc->remaining ) {
 		fdc->data = fdc->buf[fdc->offset];
-		fdc->status |= WD1770_STAT_DRQ;
-		qemu_irq_raise ( fdc->drq );
+		wd1770_drq ( fdc );
 		return;
 	}
 
@@ -428,15 +508,16 @@ static void wd1770_read_sector_next ( WD1770FDC *fdc ) {
  * @v fdc		1770 FDC
  */
 static void wd1770_write_sector ( WD1770FDC *fdc ) {
-	WD1770FDD *fdd = wd1770_fdd ( fdc );
+	WD1770FDD *fdd;
 
 	/* Switch on motor.  Do this unconditionally, ignoring the
 	 * WD1770_CMD_DISABLE_SPIN_UP bit since this bit has a
 	 * different meaning on WD1773.
 	 */
-	fdc->status |= WD1770_STAT_MOTOR_ON;
+	wd1770_motor_on ( fdc );
 
 	/* Fail if block device is read-only */
+	fdd = wd1770_fdd ( fdc );
 	if ( fdd && ( bdrv_is_read_only ( fdd->block ) ) ) {
 		fdc->status |= WD1770_STAT_PROTECTED;
 		wd1770_done ( fdc, true );
@@ -459,9 +540,8 @@ static void wd1770_write_sector ( WD1770FDC *fdc ) {
 	fdc->offset = 0;
 	fdc->remaining = fdd->sector_size;
 
-	/* Assert data interrupt to request first byte */
-	fdc->status |= WD1770_STAT_DRQ;
-	qemu_irq_raise ( fdc->drq );
+	/* Request first byte of data */
+	wd1770_drq ( fdc );
 }
 
 /**
@@ -470,37 +550,39 @@ static void wd1770_write_sector ( WD1770FDC *fdc ) {
  * @v fdc		1770 FDC
  */
 static void wd1770_write_sector_next ( WD1770FDC *fdc ) {
-	WD1770FDD *fdd = wd1770_fdd ( fdc );
+	WD1770FDD *fdd;
 	int64_t offset;
 
 	/* Deassert data interrupt */
 	fdc->status &= ~WD1770_STAT_DRQ;
 	qemu_irq_lower ( fdc->drq );
 
-	/* Read byte into sector buffer and increment offset */
+	/* Read byte into data buffer and increment offset */
 	fdc->buf[fdc->offset] = fdc->data;
 	fdc->offset++;
 	fdc->remaining--;
 
-	/* If we have not yet reached the end of the sector, reassert
-	 * the data interrupt to request the next byte.
+	/* If we have not yet reached the end of the sector, request
+	 * the next byte.
 	 */
 	if ( fdc->remaining ) {
-		fdc->status |= WD1770_STAT_DRQ;
-		qemu_irq_raise ( fdc->drq );
+		wd1770_drq ( fdc );
+		return;
+	}
+
+	/* Calculate the block device offset */
+	offset = wd1770_offset ( fdc, fdc->sector );
+	if ( offset < 0 ) {
+		fdc->status |= WD1770_STAT_NOT_FOUND;
+		wd1770_done ( fdc, true );
 		return;
 	}
 
 	/* At this point, we know that we have a block device since
-	 * the operation has not been cancelled.
+	 * the offset calculation succeeded.
 	 */
+	fdd = wd1770_fdd ( fdc );
 	assert ( fdd != NULL );
-
-	/* Calculate the block device offset.  We know that this must
-	 * succeed since the operation has not been cancelled.
-	 */
-	offset = wd1770_offset ( fdc, fdc->sector );
-	assert ( offset >= 0 );
 
 	/* Write the completed sector to the block device */
 	if ( bdrv_pwrite ( fdd->block, offset, fdc->buf,
@@ -532,23 +614,23 @@ static void wd1770_write_sector_next ( WD1770FDC *fdc ) {
  * @v fdc		1770 FDC
  */
 static void wd1770_write_track ( WD1770FDC *fdc ) {
-	WD1770FDD *fdd = wd1770_fdd ( fdc );
+	WD1770FDD *fdd;
 
 	/* Switch on motor.  Do this unconditionally, ignoring the
 	 * WD1770_CMD_DISABLE_SPIN_UP bit since this bit has a
 	 * different meaning on WD1773.
 	 */
-	fdc->status |= WD1770_STAT_MOTOR_ON;
+	wd1770_motor_on ( fdc );
 
 	/* Fail if no media is present */
+	fdd = wd1770_fdd ( fdc );
 	if ( ! fdd ) {
+		LOG_WD1770 ( "%s: drive %d has no media\n",
+			     wd1770_name ( fdc ), fdc->drive );
 		fdc->status |= WD1770_STAT_NOT_FOUND;
 		wd1770_done ( fdc, true );
 		return;
 	}
-
-	/* At this point, we know that we have a block device */
-	assert ( fdd != NULL );
 
 	/* Fail if block device is read-only */
 	if ( bdrv_is_read_only ( fdd->block ) ) {
@@ -562,9 +644,8 @@ static void wd1770_write_track ( WD1770FDC *fdc ) {
 	fdc->remaining = ( fdc->single_density ? WD1770_TRACK_SIZE_SINGLE :
 			   WD1770_TRACK_SIZE_DOUBLE );
 
-	/* Request first byte of raw track data */
-	fdc->status |= WD1770_STAT_DRQ;
-	qemu_irq_raise ( fdc->drq );
+	/* Start data request timer for first byte of raw track data */
+	wd1770_drq_delayed ( fdc, WD1770_DRQ_SEEK_DELAY_NS );
 }
 
 /**
@@ -579,8 +660,10 @@ static int wd1770_decode_geometry ( WD1770FDC *fdc, WD1770IdAddressMark *id,
 	WD1770FDD *fdd = wd1770_fdd ( fdc );
 	unsigned int sector_size;
 
-	/* Update disk geometry */
+	/* This function can never be called without a valid drive */
 	assert ( fdd != NULL );
+
+	/* Update disk geometry */
 	sector_size = wd1770_sector_size ( id );
 	if ( fdd->sector_size < sector_size )
 		fdd->sector_size = sector_size;
@@ -606,10 +689,17 @@ static int wd1770_decode_data ( WD1770FDC *fdc, WD1770IdAddressMark *id,
 	unsigned int sector_size;
 	int64_t offset;
 
-	/* Write data to block device */
+	/* This function can never be called without a valid drive */
 	assert ( fdd != NULL );
+
+	/* Check that sector can be found, and calculate the block
+	 * device offset,
+	 */
 	offset = wd1770_offset ( fdc, id->sector );
-	assert ( offset >= 0 );
+	if ( offset < 0 )
+		return -1;
+
+	/* Write data to block device */
 	sector_size = wd1770_sector_size ( id );
 	if ( bdrv_pwrite ( fdd->block, offset, data, sector_size ) < 0 ) {
 		LOG_WD1770 ( "%s: could not write to %s\n", wd1770_name ( fdc ),
@@ -651,35 +741,39 @@ static int wd1770_decode_track ( WD1770FDC *fdc,
 		case WD1770_ID_ADDRESS_MARK:
 			/* Found an ID address mark: record the address */
 			if ( remaining < sizeof ( id ) ) {
-				LOG_WD1770 ( "%s: truncated ID address mark\n",
-					     wd1770_name ( fdc ) );
+				LOG_WD1770 ( "%s: truncated ID address mark "
+					     "at %d/%d\n", wd1770_name ( fdc ),
+					     raw_offset, fdc->offset );
 				break;
 			}
 			memcpy ( &id, &fdc->buf[raw_offset], sizeof ( id ) );
+			raw_offset += sizeof ( id );
 			found_id = 1;
 			break;
 
 		case WD1770_DATA_ADDRESS_MARK:
 			/* Found a data address mark: process the data */
 			if ( ! found_id ) {
-				LOG_WD1770 ( "%s: ID-less data address mark\n",
-					     wd1770_name ( fdc ) );
+				LOG_WD1770 ( "%s: ID-less data address mark "
+					     "at %d/%d\n", wd1770_name ( fdc ),
+					     raw_offset, fdc->offset );
 				break;
 			}
 			found_id = 0;
 			sector_size = wd1770_sector_size ( &id );
 			if ( remaining < sector_size ) {
-				LOG_WD1770 ( "%s: truncated data address "
-					     "mark\n", wd1770_name ( fdc ) );
+				LOG_WD1770 ( "%s: truncated data address mark "
+					     "at %d/%d\n", wd1770_name ( fdc ),
+					     raw_offset, fdc->offset );
 				break;
 			}
 			if ( decode ( fdc, &id, &fdc->buf[raw_offset] ) < 0 )
 				return -1;
+			raw_offset += sector_size;
 			break;
 
 		default:
 			/* Ignore this byte */
-			raw_offset++;
 			break;
 		}
 	}
@@ -693,31 +787,35 @@ static int wd1770_decode_track ( WD1770FDC *fdc,
  * @v fdc		1770 FDC
  */
 static void wd1770_write_track_next ( WD1770FDC *fdc ) {
-	WD1770FDD *fdd = wd1770_fdd ( fdc );
+	WD1770FDD *fdd;
 	int64_t fdd_size;
 
 	/* Deassert data interrupt */
 	fdc->status &= ~WD1770_STAT_DRQ;
 	qemu_irq_lower ( fdc->drq );
 
-	/* Read byte into sector buffer and increment offset */
+	/* Read byte into data buffer and increment offset */
 	fdc->buf[fdc->offset] = fdc->data;
 	fdc->offset++;
 	fdc->remaining--;
 
-	/* If we have not yet reached the end of the sector, reassert
-	 * the data interrupt to request the next byte.
+	/* If we have not yet reached the end of the track, restart
+	 * the data request timer for the next byte.
 	 */
 	if ( fdc->remaining ) {
-		fdc->status |= WD1770_STAT_DRQ;
-		qemu_irq_raise ( fdc->drq );
+		wd1770_drq_delayed ( fdc, WD1770_DRQ_BYTE_DELAY_NS );
 		return;
 	}
 
-	/* At this point, we know that we have a block device since
-	 * the operation has not been cancelled.
-	 */
-	assert ( fdd != NULL );
+	/* Fail if no media is present (which should not happen here) */
+	fdd = wd1770_fdd ( fdc );
+	if ( ! fdd ) {
+		LOG_WD1770 ( "%s: drive %d has no media\n",
+			     wd1770_name ( fdc ), fdc->drive );
+		fdc->status |= WD1770_STAT_NOT_FOUND;
+		wd1770_done ( fdc, true );
+		return;
+	}
 
 	/* Decode raw track data to determine new disk geometry */
 	fdd->single_density = fdc->single_density;
@@ -1217,7 +1315,10 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 
 	/* Initialise FDC */
 	fdc->buf = qemu_memalign ( BDRV_SECTOR_SIZE, WD1770_BUF_SIZE );
-	fdc->motor_off = qemu_new_timer_ms ( vm_clock, wd1770_motor_off, fdc );
+	fdc->drq_timer =
+		qemu_new_timer_ns ( vm_clock, wd1770_drq_expired, fdc );
+	fdc->motor_off_timer =
+		qemu_new_timer_ms ( vm_clock, wd1770_motor_off_expired, fdc );
 
 	/* Initialise drives */
 	for ( i = 0 ; i < ARRAY_SIZE ( fdc->fdds ) ; i++ ) {
