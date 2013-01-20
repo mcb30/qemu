@@ -89,22 +89,22 @@ static inline unsigned int wd1770_sector_size ( WD1770IdAddressMark *id ) {
 	return ( 128 << id->sector_size_128_log2 );
 }
 
-/** Per-byte data request delay in nanoseconds
+/** Command delay in nanoseconds
+ *
+ * Some programs (e.g. disk formatters) don't cope properly if the
+ * virtual hardware runs with essentially zero seek times.  Slow down
+ * some operations by delaying the start of each command.
+ */
+#define WD1770_CMD_DELAY_NS 1000
+
+/** Data request delay in nanoseconds
  *
  * Some programs (e.g. disk formatters) don't cope properly if the
  * virtual hardware runs with essentially zero time between each data
  * byte.  Slow down some operations by delaying each individual data
  * request.
  */
-#define WD1770_DRQ_BYTE_DELAY_NS 1
-
-/** Long data request delay in nanoseconds
- *
- * Some programs (e.g. disk formatters) don't cope properly if the
- * virtual hardware runs with essentially zero seek times.  Slow down
- * some operations by delaying the first data request.
- */
-#define WD1770_DRQ_SEEK_DELAY_NS 1000
+#define WD1770_DRQ_DELAY_NS 1
 
 /** Motor switch-off delay in milliseconds
  *
@@ -147,6 +147,8 @@ struct WD1770FDC {
 	WD1770FDD fdds[WD1770_DRIVE_COUNT];
 	/** Sector buffer */
 	uint8_t *buf;
+	/** Command timer */
+	QEMUTimer *command_timer;
 	/** Data request timer */
 	QEMUTimer *drq_timer;
 	/** Motor switch-off timer */

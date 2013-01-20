@@ -35,6 +35,9 @@
 /** A WD1770 command handler */
 typedef void ( * WD1770CommandHandler ) ( WD1770FDC *fdc );
 
+/** Identify command handler */
+static WD1770CommandHandler wd1770_command_handler ( uint8_t command );
+
 /**
  * Get device name for log messages
  *
@@ -44,6 +47,47 @@ typedef void ( * WD1770CommandHandler ) ( WD1770FDC *fdc );
 static inline const char * wd1770_name ( WD1770FDC *fdc ) {
 
 	return qdev_fw_name ( &fdc->busdev.qdev );
+}
+
+/**
+ * Issue command
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_command ( WD1770FDC *fdc ) {
+	WD1770CommandHandler handler;
+
+	/* Identify command handler */
+	handler = wd1770_command_handler ( fdc->command );
+
+	/* Hand off to individual command handler */
+	handler ( fdc );
+}
+
+/**
+ * Start command timer to issue command
+ *
+ * @v fdc		1770 FDC
+ */
+static void wd1770_command_delayed ( WD1770FDC *fdc ) {
+	int64_t command_time_ns;
+
+	/* Start timer to issue command */
+	command_time_ns = ( qemu_get_clock_ns ( vm_clock ) +
+			    WD1770_CMD_DELAY_NS );
+	qemu_mod_timer ( fdc->command_timer, command_time_ns );
+}
+
+/**
+ * Issue command upon command timer expiry
+ *
+ * @v opaque		1770 FDC
+ */
+static void wd1770_command_expired ( void *opaque ) {
+	WD1770FDC *fdc = opaque;
+
+	/* Issue command */
+	wd1770_command ( fdc );
 }
 
 /**
@@ -63,11 +107,11 @@ static inline void wd1770_drq ( WD1770FDC *fdc ) {
  *
  * @v fdc		1770 FDC
  */
-static void wd1770_drq_delayed ( WD1770FDC *fdc, int64_t delay ) {
+static void wd1770_drq_delayed ( WD1770FDC *fdc ) {
 	int64_t drq_time_ns;
 
 	/* Start timer to request next data byte */
-	drq_time_ns = ( qemu_get_clock_ns ( vm_clock ) + delay );
+	drq_time_ns = ( qemu_get_clock_ns ( vm_clock ) + WD1770_DRQ_DELAY_NS );
 	qemu_mod_timer ( fdc->drq_timer, drq_time_ns );
 }
 
@@ -137,7 +181,7 @@ static void wd1770_motor_off_expired ( void *opaque ) {
 }
 
 /**
- * Complete operation
+ * Complete command
  *
  * @v fdc		1770 FDC
  * @v intrq		Generate completion interrupt
@@ -151,7 +195,10 @@ static void wd1770_done ( WD1770FDC *fdc, bool intrq ) {
 	fdc->status &= ~( WD1770_STAT_BUSY | WD1770_STAT_DRQ );
 	qemu_irq_lower ( fdc->drq );
 
-	/* Mark any ongoing operation as complete */
+	/* Stop command timer to cancel any pending command, and mark
+	 * any ongoing command as complete.
+	 */
+	qemu_del_timer ( fdc->command_timer );
 	fdc->remaining = 0;
 
 	/* Start timer to switch off motor (if currently on) */
@@ -175,7 +222,7 @@ void wd1770_reset ( WD1770FDC *fdc ) {
 
 	LOG_WD1770 ( "%s: reset\n", wd1770_name ( fdc ) );
 
-	/* Cancel any ongoing operation */
+	/* Cancel any ongoing command */
 	wd1770_done ( fdc, false );
 
 	/* Reset registers (excluding those provided by external sources) */
@@ -455,7 +502,7 @@ static void wd1770_read_sector ( WD1770FDC *fdc ) {
 		return;
 	}
 
-	/* Start ongoing operation */
+	/* Start ongoing command */
 	fdc->offset = 0;
 	fdc->remaining = fdd->sector_size;
 
@@ -490,15 +537,16 @@ static void wd1770_read_sector_next ( WD1770FDC *fdc ) {
 	}
 
 	/* If we are reading multiple sectors, then increment the
-	 * sector register and start reading the next sector.
+	 * sector register and reissue command to start reading the
+	 * next sector.
 	 */
 	if ( fdc->command & WD1770_CMD_MULTIPLE ) {
 		fdc->sector++;
-		wd1770_read_sector ( fdc );
+		wd1770_command_delayed ( fdc );
 		return;
 	}
 
-	/* Otherwise, mark the operation as complete */
+	/* Otherwise, mark the command as complete */
 	wd1770_done ( fdc, true );
 }
 
@@ -536,7 +584,7 @@ static void wd1770_write_sector ( WD1770FDC *fdc ) {
 	 */
 	assert ( fdd != NULL );
 
-	/* Start ongoing operation */
+	/* Start ongoing command */
 	fdc->offset = 0;
 	fdc->remaining = fdd->sector_size;
 
@@ -596,15 +644,16 @@ static void wd1770_write_sector_next ( WD1770FDC *fdc ) {
 	}
 
 	/* If we are writing multiple sectors, then increment the
-	 * sector register and start writing the next sector.
+	 * sector register and reissue command to start writing the
+	 * next sector.
 	 */
 	if ( fdc->command & WD1770_CMD_MULTIPLE ) {
 		fdc->sector++;
-		wd1770_write_sector ( fdc );
+		wd1770_command_delayed ( fdc );
 		return;
 	}
 
-	/* Otherwise, mark the operation as complete */
+	/* Otherwise, mark the command as complete */
 	wd1770_done ( fdc, true );
 }
 
@@ -639,13 +688,13 @@ static void wd1770_write_track ( WD1770FDC *fdc ) {
 		return;
 	}
 
-	/* Start ongoing operation */
+	/* Start ongoing command */
 	fdc->offset = 0;
 	fdc->remaining = ( fdc->single_density ? WD1770_TRACK_SIZE_SINGLE :
 			   WD1770_TRACK_SIZE_DOUBLE );
 
 	/* Start data request timer for first byte of raw track data */
-	wd1770_drq_delayed ( fdc, WD1770_DRQ_SEEK_DELAY_NS );
+	wd1770_drq_delayed ( fdc );
 }
 
 /**
@@ -803,7 +852,7 @@ static void wd1770_write_track_next ( WD1770FDC *fdc ) {
 	 * the data request timer for the next byte.
 	 */
 	if ( fdc->remaining ) {
-		wd1770_drq_delayed ( fdc, WD1770_DRQ_BYTE_DELAY_NS );
+		wd1770_drq_delayed ( fdc );
 		return;
 	}
 
@@ -854,7 +903,7 @@ static void wd1770_write_track_next ( WD1770FDC *fdc ) {
 		return;
 	}
 
-	/* Mark operation as complete */
+	/* Mark command as complete */
 	wd1770_done ( fdc, true );
 }
 
@@ -1101,8 +1150,9 @@ static void wd1770_command_write ( WD1770FDC *fdc, uint8_t command ) {
 	/* Mark controller as busy */
 	fdc->status |= WD1770_STAT_BUSY;
 
-	/* Hand off to individual command handler */
-	handler ( fdc );
+	/* Start command timer */
+	wd1770_command_delayed ( fdc );
+
 }
 
 /**
@@ -1191,7 +1241,7 @@ static uint8_t wd1770_data_read ( WD1770FDC *fdc ) {
 	/* Read data register */
 	data = fdc->data;
 
-	/* If a read operation is in progress, read the next data byte
+	/* If a read command is in progress, read the next data byte
 	 * into the data register.
 	 */
 	if ( fdc->remaining ) {
@@ -1216,7 +1266,7 @@ static void wd1770_data_write ( WD1770FDC *fdc, uint8_t data ) {
 	/* Write data register */
 	fdc->data = data;
 
-	/* If a write operation is in progress, write this byte from
+	/* If a write command is in progress, write this byte from
 	 * the data register.
 	 */
 	if ( fdc->remaining ) {
@@ -1315,6 +1365,8 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 
 	/* Initialise FDC */
 	fdc->buf = qemu_memalign ( BDRV_SECTOR_SIZE, WD1770_BUF_SIZE );
+	fdc->command_timer =
+		qemu_new_timer_ns ( vm_clock, wd1770_command_expired, fdc );
 	fdc->drq_timer =
 		qemu_new_timer_ns ( vm_clock, wd1770_drq_expired, fdc );
 	fdc->motor_off_timer =
@@ -1412,6 +1464,9 @@ static const VMStateDescription vmstate_wd1770 = {
 	.fields = ( VMStateField[] ) {
 		VMSTATE_STRUCT_ARRAY ( fdds, WD1770FDC, WD1770_DRIVE_COUNT,
 				       1, vmstate_wd1770_fdd, WD1770FDD ),
+		VMSTATE_TIMER ( command_timer, WD1770FDC ),
+		VMSTATE_TIMER ( drq_timer, WD1770FDC ),
+		VMSTATE_TIMER ( motor_off_timer, WD1770FDC ),
 		VMSTATE_INT8 ( drive, WD1770FDC ),
 		VMSTATE_UINT8 ( side, WD1770FDC ),
 		VMSTATE_BOOL ( single_density, WD1770FDC ),
