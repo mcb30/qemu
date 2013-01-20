@@ -663,7 +663,7 @@ static void page_flush_tb_1(int level, void **lp)
     if (*lp == NULL) {
         return;
     }
-    if (level == 0) {
+    if (level <= 0) {
         PageDesc *pd = *lp;
 
         for (i = 0; i < L2_SIZE; ++i) {
