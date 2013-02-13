@@ -39,17 +39,6 @@ typedef void ( * WD1770CommandHandler ) ( WD1770FDC *fdc );
 static WD1770CommandHandler wd1770_command_handler ( uint8_t command );
 
 /**
- * Get device name for log messages
- *
- * @v fdc		1770 FDC
- * @ret name		Device name
- */
-static inline const char * wd1770_name ( WD1770FDC *fdc ) {
-
-	return qdev_fw_name ( &fdc->busdev.qdev );
-}
-
-/**
  * Set device operations
  *
  * @v fdc		1770 FDC
@@ -237,7 +226,7 @@ static void wd1770_done ( WD1770FDC *fdc, bool intrq ) {
  */
 void wd1770_reset ( WD1770FDC *fdc ) {
 
-	LOG_WD1770 ( "%s: reset\n", wd1770_name ( fdc ) );
+	LOG_WD1770 ( "%s: reset\n", fdc->name );
 
 	/* Cancel any ongoing command */
 	wd1770_done ( fdc, false );
@@ -270,8 +259,7 @@ static WD1770FDD * wd1770_fdd ( WD1770FDC *fdc ) {
 
 	/* Check that drive number is valid */
 	if ( ( drive < 0 ) || ( drive >= ARRAY_SIZE ( fdc->fdds ) ) ) {
-		LOG_WD1770 ( "%s: invalid drive %d\n", wd1770_name ( fdc ),
-			     drive );
+		LOG_WD1770 ( "%s: invalid drive %d\n", fdc->name, drive );
 		return NULL;
 	}
 	fdd = &fdc->fdds[drive];
@@ -279,14 +267,13 @@ static WD1770FDD * wd1770_fdd ( WD1770FDC *fdc ) {
 	/* Check that a block device is attached */
 	if ( ! fdd->block ) {
 		LOG_WD1770 ( "%s: no block device attached to drive %d\n",
-			     wd1770_name ( fdc ), drive );
+			     fdc->name, drive );
 		return NULL;
 	}
 
 	/* Check that media is present */
 	if ( ! bdrv_is_inserted ( fdd->block ) ) {
-		LOG_WD1770 ( "%s: no media present in %s\n",
-			     wd1770_name ( fdc ),
+		LOG_WD1770 ( "%s: no media present in %s\n", fdc->name,
 			     bdrv_get_device_name ( fdd->block ) );
 		return NULL;
 	}
@@ -295,13 +282,13 @@ static WD1770FDD * wd1770_fdd ( WD1770FDC *fdc ) {
 	if ( fdd->sides == 0 ) {
 		if ( ! ( fdc->ops && fdc->ops->guess_geometry ) ) {
 			LOG_WD1770 ( "%s: no way to guess geometry for %s\n",
-				     wd1770_name ( fdc ),
+				     fdc->name,
 				     bdrv_get_device_name ( fdd->block ) );
 			return NULL;
 		}
 		if ( fdc->ops->guess_geometry ( fdc->opaque, fdd ) < 0 ) {
 			LOG_WD1770 ( "%s: could not guess geometry for %s\n",
-				     wd1770_name ( fdc ),
+				     fdc->name,
 				     bdrv_get_device_name ( fdd->block ) );
 			/* Ensure geometry is left invalid */
 			fdd->sides = 0;
@@ -309,8 +296,7 @@ static WD1770FDD * wd1770_fdd ( WD1770FDC *fdc ) {
 		}
 		LOG_WD1770 ( "%s: %s guessed as %s-density, %d side(s), %d "
 			     "tracks, %d sectors of %d bytes\n",
-			     wd1770_name ( fdc ),
-			     bdrv_get_device_name ( fdd->block ),
+			     fdc->name, bdrv_get_device_name ( fdd->block ),
 			     ( fdd->single_density ? "single" : "double" ),
 			     fdd->sides, fdd->tracks, fdd->sectors,
 			     fdd->sector_size );
@@ -332,8 +318,8 @@ static void wd1770_change_media_cb ( void *opaque, bool load ) {
 
 	/* Calculate drive number */
 	drive = ( fdd - fdc->fdds );
-	LOG_WD1770 ( "%s: media for drive %d %s\n", wd1770_name ( fdc ),
-		     drive, ( load ? "inserted" : "removed" ) );
+	LOG_WD1770 ( "%s: media for drive %d %s\n", fdc->name, drive,
+		     ( load ? "inserted" : "removed" ) );
 
 	/* If any operation is in progress on this drive, terminate it
 	 * and switch off the motor.
@@ -359,8 +345,7 @@ static void wd1770_resize_cb ( void *opaque ) {
 
 	/* Calculate drive number */
 	drive = ( fdd - fdc->fdds );
-	LOG_WD1770 ( "%s: media for drive %d resized\n",
-		     wd1770_name ( fdc ), drive );
+	LOG_WD1770 ( "%s: media for drive %d resized\n", fdc->name, drive );
 
 	/* Mark geometry as invalid */
 	fdd->sides = 0;
@@ -386,8 +371,7 @@ static int64_t wd1770_offset ( WD1770FDC *fdc, uint8_t sector ) {
 	fdd = wd1770_fdd ( fdc );
 	if ( ! fdd ) {
 		LOG_WD1770 ( "%s: track %d.%d sector %d not found\n",
-			     wd1770_name ( fdc ), fdc->track,
-			     fdc->side, sector );
+			     fdc->name, fdc->track, fdc->side, sector );
 		return -1;
 	}
 
@@ -395,9 +379,8 @@ static int64_t wd1770_offset ( WD1770FDC *fdc, uint8_t sector ) {
 	 * be detected.
 	 */
 	if ( ! ( fdc->status & WD1770_STAT_MOTOR_ON ) ) {
-		LOG_WD1770 ( "%s: track %d.%d sector %d not found: motor "
-			     "off\n", wd1770_name ( fdc ), fdc->track,
-			     fdc->side, sector );
+		LOG_WD1770 ( "%s: track %d.%d sector %d not found: motor off\n",
+			     fdc->name, fdc->track, fdc->side, sector );
 		return -1;
 	}
 
@@ -407,8 +390,8 @@ static int64_t wd1770_offset ( WD1770FDC *fdc, uint8_t sector ) {
 	 */
 	if ( fdd->single_density != fdc->single_density ) {
 		LOG_WD1770 ( "%s: track %d.%d sector %d not found: wrong "
-			     "density\n", wd1770_name ( fdc ), fdc->track,
-			     fdc->side, sector );
+			     "density\n", fdc->name, fdc->track, fdc->side,
+			     sector );
 		return -1;
 	}
 
@@ -418,31 +401,31 @@ static int64_t wd1770_offset ( WD1770FDC *fdc, uint8_t sector ) {
 	 */
 	if ( fdd->track != fdc->track ) {
 		LOG_WD1770 ( "%s: track %d.%d sector %d not found: mismatch "
-			     "(physical track %d)\n", wd1770_name ( fdc ),
-			     fdc->track, fdc->side, sector, fdd->track );
+			     "(physical track %d)\n", fdc->name, fdc->track,
+			     fdc->side, sector, fdd->track );
 		return -1;
 	}
 
 	/* Check if side is present on media */
 	if ( fdc->side >= fdd->sides ) {
 		LOG_WD1770 ( "%s: track %d.%d sector %d not found: maximum "
-			     "side is %d\n", wd1770_name ( fdc ), fdc->track,
-			     fdc->side, sector, ( fdd->sides - 1 ) );
+			     "side is %d\n", fdc->name, fdc->track, fdc->side,
+			     sector, ( fdd->sides - 1 ) );
 		return -1;
 	}
 
 	/* Check if track is present on media */
 	if ( fdd->track >= fdd->tracks ) {
 		LOG_WD1770 ( "%s: track %d.%d sector %d not found: maximum "
-			     "track is %d\n", wd1770_name ( fdc ), fdc->track,
-			     fdc->side, sector, ( fdd->tracks - 1 ) );
+			     "track is %d\n", fdc->name, fdc->track, fdc->side,
+			     sector, ( fdd->tracks - 1 ) );
 		return -1;
 	}
 
 	/* Check if sector is present on media */
 	if ( sector >= fdd->sectors ) {
 		LOG_WD1770 ( "%s: track %d.%d sector %d not found: maximum "
-			     "sector is %d\n", wd1770_name ( fdc ), fdc->track,
+			     "sector is %d\n", fdc->name, fdc->track,
 			     fdc->side, sector, ( fdd->sectors - 1 ) );
 		return -1;
 	}
@@ -452,8 +435,7 @@ static int64_t wd1770_offset ( WD1770FDC *fdc, uint8_t sector ) {
 		+ sector );
 	offset = ( lba * fdd->sector_size );
 	LOG_WD1770 ( "%s: track %d.%d sector %d is LBA %d offset %" PRId64 "\n",
-		     wd1770_name ( fdc ), fdc->track, fdc->side, sector,
-		     lba, offset );
+		     fdc->name, fdc->track, fdc->side, sector, lba, offset );
 
 	return offset;
 }
@@ -472,7 +454,7 @@ void wd1770_set_drive ( WD1770FDC *fdc, int drive ) {
 
 	/* Record drive */
 	fdc->drive = drive;
-	LOG_WD1770 ( "%s: drive=%d (%s)\n", wd1770_name ( fdc ), drive,
+	LOG_WD1770 ( "%s: drive=%d (%s)\n", fdc->name, drive,
 		     ( ( drive < 0 ) ? "<unselected>" :
 		       ( fdd ? bdrv_get_device_name ( fdd->block ) :
 			 "<missing>" ) ) );
@@ -489,7 +471,7 @@ void wd1770_set_drive ( WD1770FDC *fdc, int drive ) {
  */
 void wd1770_set_side ( WD1770FDC *fdc, unsigned int side ) {
 
-	LOG_WD1770 ( "%s: side=%d\n", wd1770_name ( fdc ), side );
+	LOG_WD1770 ( "%s: side=%d\n", fdc->name, side );
 
 	/* Record side */
 	fdc->side = side;
@@ -506,7 +488,7 @@ void wd1770_set_side ( WD1770FDC *fdc, unsigned int side ) {
  */
 void wd1770_set_single_density ( WD1770FDC *fdc, bool single_density ) {
 
-	LOG_WD1770 ( "%s: density=%s\n", wd1770_name ( fdc ),
+	LOG_WD1770 ( "%s: density=%s\n", fdc->name,
 		     ( single_density ? "single" : "double" ) );
 
 	/* Record side */
@@ -546,7 +528,7 @@ static void wd1770_seek ( WD1770FDC *fdc, int track_phys_delta,
 	/* Calculate new track register content */
 	fdc->track += track_reg_delta;
 	LOG_WD1770 ( "%s: now on track %d.%d (physical track %d)%s\n",
-		     wd1770_name ( fdc ), fdc->track, fdc->side,
+		     fdc->name, fdc->track, fdc->side,
 		     ( fdd ? fdd->track : -1 ),
 		     ( fdd ? ( ( fdd->track == fdc->track ) ?
 			       "" : " mismatch" ) : " invalid" ) );
@@ -602,8 +584,7 @@ static void wd1770_read_sector ( WD1770FDC *fdc ) {
 	if ( bdrv_pread ( fdd->block, offset, fdc->buf,
 			  fdd->sector_size ) < 0 ) {
 		LOG_WD1770 ( "%s: could not read from %s\n",
-			     wd1770_name ( fdc ),
-			     bdrv_get_device_name ( fdd->block ) );
+			     fdc->name, bdrv_get_device_name ( fdd->block ) );
 		fdc->status |= WD1770_STAT_NOT_FOUND;
 		wd1770_done ( fdc, true );
 		return;
@@ -743,8 +724,7 @@ static void wd1770_write_sector_next ( WD1770FDC *fdc ) {
 	if ( bdrv_pwrite ( fdd->block, offset, fdc->buf,
 			   fdd->sector_size ) < 0 ) {
 		LOG_WD1770 ( "%s: could not write to %s\n",
-			     wd1770_name ( fdc ),
-			     bdrv_get_device_name ( fdd->block ) );
+			     fdc->name, bdrv_get_device_name ( fdd->block ) );
 		fdc->status |= WD1770_STAT_NOT_FOUND;
 		wd1770_done ( fdc, true );
 		return;
@@ -782,7 +762,7 @@ static void wd1770_write_track ( WD1770FDC *fdc ) {
 	fdd = wd1770_fdd ( fdc );
 	if ( ! fdd ) {
 		LOG_WD1770 ( "%s: drive %d has no media\n",
-			     wd1770_name ( fdc ), fdc->drive );
+			     fdc->name, fdc->drive );
 		fdc->status |= WD1770_STAT_NOT_FOUND;
 		wd1770_done ( fdc, true );
 		return;
@@ -826,8 +806,8 @@ static int wd1770_decode_geometry ( WD1770FDC *fdc, WD1770IdAddressMark *id,
 	if ( fdd->sectors <= id->sector )
 		fdd->sectors = ( id->sector + 1 );
 	LOG_WD1770 ( "%s: track %d.%d decoded track %d.%d sector %d length "
-		     "%d\n", wd1770_name ( fdc ), fdc->track, fdc->side,
-		     id->track, id->side, id->sector, sector_size );
+		     "%d\n", fdc->name, fdc->track, fdc->side, id->track,
+		     id->side, id->sector, sector_size );
 
 	return 0;
 }
@@ -858,7 +838,7 @@ static int wd1770_decode_data ( WD1770FDC *fdc, WD1770IdAddressMark *id,
 	/* Write data to block device */
 	sector_size = wd1770_sector_size ( id );
 	if ( bdrv_pwrite ( fdd->block, offset, data, sector_size ) < 0 ) {
-		LOG_WD1770 ( "%s: could not write to %s\n", wd1770_name ( fdc ),
+		LOG_WD1770 ( "%s: could not write to %s\n", fdc->name,
 			     bdrv_get_device_name ( fdd->block ) );
 		return -1;
 	}
@@ -898,7 +878,7 @@ static int wd1770_decode_track ( WD1770FDC *fdc,
 			/* Found an ID address mark: record the address */
 			if ( remaining < sizeof ( id ) ) {
 				LOG_WD1770 ( "%s: truncated ID address mark "
-					     "at %d/%d\n", wd1770_name ( fdc ),
+					     "at %d/%d\n", fdc->name,
 					     raw_offset, fdc->offset );
 				break;
 			}
@@ -911,7 +891,7 @@ static int wd1770_decode_track ( WD1770FDC *fdc,
 			/* Found a data address mark: process the data */
 			if ( ! found_id ) {
 				LOG_WD1770 ( "%s: ID-less data address mark "
-					     "at %d/%d\n", wd1770_name ( fdc ),
+					     "at %d/%d\n", fdc->name,
 					     raw_offset, fdc->offset );
 				break;
 			}
@@ -919,7 +899,7 @@ static int wd1770_decode_track ( WD1770FDC *fdc,
 			sector_size = wd1770_sector_size ( &id );
 			if ( remaining < sector_size ) {
 				LOG_WD1770 ( "%s: truncated data address mark "
-					     "at %d/%d\n", wd1770_name ( fdc ),
+					     "at %d/%d\n", fdc->name,
 					     raw_offset, fdc->offset );
 				break;
 			}
@@ -967,7 +947,7 @@ static void wd1770_write_track_next ( WD1770FDC *fdc ) {
 	fdd = wd1770_fdd ( fdc );
 	if ( ! fdd ) {
 		LOG_WD1770 ( "%s: drive %d has no media\n",
-			     wd1770_name ( fdc ), fdc->drive );
+			     fdc->name, fdc->drive );
 		fdc->status |= WD1770_STAT_NOT_FOUND;
 		wd1770_done ( fdc, true );
 		return;
@@ -983,7 +963,7 @@ static void wd1770_write_track_next ( WD1770FDC *fdc ) {
 	fdd->sector_size = 0;
 	if ( wd1770_decode_track ( fdc, wd1770_decode_geometry ) < 0 ) {
 		LOG_WD1770 ( "%s: could not decode track geometry\n",
-			     wd1770_name ( fdc ) );
+			     fdc->name );
 		fdc->status |= WD1770_STAT_NOT_FOUND;
 		wd1770_done ( fdc, true );
 		return;
@@ -994,7 +974,7 @@ static void wd1770_write_track_next ( WD1770FDC *fdc ) {
 		     fdd->sector_size );
 	if ( bdrv_truncate ( fdd->block, fdd_size ) < 0 ) {
 		LOG_WD1770 ( "%s: could not resize %s to %" PRId64 "\n",
-			     wd1770_name ( fdc ),
+			     fdc->name,
 			     bdrv_get_device_name ( fdd->block ), fdd_size );
 		fdc->status |= WD1770_STAT_NOT_FOUND;
 		wd1770_done ( fdc, true );
@@ -1003,8 +983,7 @@ static void wd1770_write_track_next ( WD1770FDC *fdc ) {
 
 	/* Decode raw track data to write sectors to the block device */
 	if ( wd1770_decode_track ( fdc, wd1770_decode_data ) < 0 ) {
-		LOG_WD1770 ( "%s: could not write track data\n",
-			     wd1770_name ( fdc ) );
+		LOG_WD1770 ( "%s: could not write track data\n", fdc->name );
 		fdc->status |= WD1770_STAT_NOT_FOUND;
 		wd1770_done ( fdc, true );
 		return;
@@ -1022,7 +1001,7 @@ static void wd1770_write_track_next ( WD1770FDC *fdc ) {
 static void wd1770_command_restore ( WD1770FDC *fdc ) {
 
 	LOG_WD1770 ( "%s: command 0x%02x restore to track 0\n",
-		     wd1770_name ( fdc ), fdc->command );
+		     fdc->name, fdc->command );
 
 	/* Seek to track zero */
 	wd1770_seek ( fdc, -WD1770_MAX_TRACK, -(fdc->track) );
@@ -1037,8 +1016,8 @@ static void wd1770_command_seek ( WD1770FDC *fdc ) {
 	int delta;
 
 	LOG_WD1770 ( "%s: command 0x%02x seek from track %d.%d to track "
-		     "%d.%d\n", wd1770_name ( fdc ), fdc->command, fdc->track,
-		     fdc->side, fdc->data, fdc->side );
+		     "%d.%d\n", fdc->name, fdc->command, fdc->track, fdc->side,
+		     fdc->data, fdc->side );
 
 	/* Seek to specified track number */
 	delta = ( fdc->data - fdc->track );
@@ -1053,7 +1032,7 @@ static void wd1770_command_seek ( WD1770FDC *fdc ) {
 static void wd1770_command_step ( WD1770FDC *fdc ) {
 
 	LOG_WD1770 ( "%s: command 0x%02x step (%s) to track %d.%d\n",
-		     wd1770_name ( fdc ), fdc->command,
+		     fdc->name, fdc->command,
 		     ( ( fdc->step > 0 ) ? "inwards" : "outwards" ),
 		     ( fdc->track + fdc->step ), fdc->side );
 
@@ -1071,8 +1050,7 @@ static void wd1770_command_step ( WD1770FDC *fdc ) {
 static void wd1770_command_step_in ( WD1770FDC *fdc ) {
 
 	LOG_WD1770 ( "%s: command 0x%02x step inwards to track %d.%d\n",
-		     wd1770_name ( fdc ), fdc->command, ( fdc->track + 1 ),
-		     fdc->side );
+		     fdc->name, fdc->command, ( fdc->track + 1 ), fdc->side );
 
 	/* Seek in direction of increasing track number */
 	fdc->step = +1;
@@ -1089,8 +1067,7 @@ static void wd1770_command_step_in ( WD1770FDC *fdc ) {
 static void wd1770_command_step_out ( WD1770FDC *fdc ) {
 
 	LOG_WD1770 ( "%s: command 0x%02x step outwards to track %d.%d\n",
-		     wd1770_name ( fdc ), fdc->command, ( fdc->track - 1 ),
-		     fdc->side );
+		     fdc->name, fdc->command, ( fdc->track - 1 ), fdc->side );
 
 	/* Seek in direction of decreasing track number */
 	fdc->step = -1;
@@ -1107,8 +1084,8 @@ static void wd1770_command_step_out ( WD1770FDC *fdc ) {
 static void wd1770_command_read_sector ( WD1770FDC *fdc ) {
 
 	LOG_WD1770 ( "%s: command 0x%02x read from track %d.%d sector %d%s\n",
-		     wd1770_name ( fdc ), fdc->command, fdc->track,
-		     fdc->side, fdc->sector,
+		     fdc->name, fdc->command, fdc->track, fdc->side,
+		     fdc->sector,
 		     ( ( fdc->command & WD1770_CMD_MULTIPLE ) ? "+" : "" ) );
 
 	/* Start reading current sector */
@@ -1123,8 +1100,8 @@ static void wd1770_command_read_sector ( WD1770FDC *fdc ) {
 static void wd1770_command_write_sector ( WD1770FDC *fdc ) {
 
 	LOG_WD1770 ( "%s: command 0x%02x write to track %d.%d sector %d%s\n",
-		     wd1770_name ( fdc ), fdc->command, fdc->track,
-		     fdc->side, fdc->sector,
+		     fdc->name, fdc->command, fdc->track, fdc->side,
+		     fdc->sector,
 		     ( ( fdc->command & WD1770_CMD_MULTIPLE ) ? "+" : "" ) );
 
 	/* Start writing current sector */
@@ -1139,7 +1116,7 @@ static void wd1770_command_write_sector ( WD1770FDC *fdc ) {
 static void wd1770_command_read_address ( WD1770FDC *fdc ) {
 
 	qemu_log_mask ( LOG_UNIMP, "%s: command 0x%02x unimplemented read "
-			"address\n", wd1770_name ( fdc ), fdc->command );
+			"address\n", fdc->name, fdc->command );
 
 	/* Fake a "lost data" error */
 	fdc->status |= WD1770_STAT_LOST;
@@ -1154,7 +1131,7 @@ static void wd1770_command_read_address ( WD1770FDC *fdc ) {
 static void wd1770_command_read_track ( WD1770FDC *fdc ) {
 
 	qemu_log_mask ( LOG_UNIMP, "%s: command 0x%02x unimplemented read "
-			"track\n", wd1770_name ( fdc ), fdc->command );
+			"track\n", fdc->name, fdc->command );
 
 	/* Fake a "lost data" error */
 	fdc->status |= WD1770_STAT_LOST;
@@ -1169,7 +1146,7 @@ static void wd1770_command_read_track ( WD1770FDC *fdc ) {
 static void wd1770_command_write_track ( WD1770FDC *fdc ) {
 
 	LOG_WD1770 ( "%s: command 0x%02x write track %d.%d\n",
-		     wd1770_name ( fdc ), fdc->command, fdc->track, fdc->side );
+		     fdc->name, fdc->command, fdc->track, fdc->side );
 
 	/* Start writing current track */
 	wd1770_write_track ( fdc );
@@ -1183,7 +1160,7 @@ static void wd1770_command_write_track ( WD1770FDC *fdc ) {
 static void wd1770_command_force_interrupt ( WD1770FDC *fdc ) {
 
 	LOG_WD1770 ( "%s: command 0x%02x force interrupt (%d remaining)\n",
-		     wd1770_name ( fdc ), fdc->command, fdc->remaining );
+		     fdc->name, fdc->command, fdc->remaining );
 
 	/* Terminate current command */
 	wd1770_done ( fdc, false );
@@ -1238,9 +1215,9 @@ static void wd1770_command_write ( WD1770FDC *fdc, uint8_t command ) {
 
 	/* If controller is busy, then ignore the command */
 	if ( fdc->status & WD1770_STAT_BUSY ) {
-		LOG_WD1770 ( "%s: command 0x%02x ignored while busy (%d "
-			     "bytes remaining)\n", wd1770_name ( fdc ),
-			     command, fdc->remaining );
+		LOG_WD1770 ( "%s: command 0x%02x ignored while busy (%d bytes "
+			     "remaining)\n", fdc->name, command,
+			     fdc->remaining );
 		return;
 	}
 
@@ -1414,7 +1391,7 @@ static uint64_t wd1770_read ( void *opaque, hwaddr addr, unsigned int size ) {
 		break;
 	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented read from "
-				"0x%02lx\n", wd1770_name ( fdc ), addr );
+				"0x%02lx\n", fdc->name, addr );
 		data = 0xff;
 		break;
 	}
@@ -1450,7 +1427,7 @@ static void wd1770_write ( void *opaque, hwaddr addr, uint64_t data64,
 		break;
 	default:
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented write 0x%02x to "
-				"0x%02lx\n", wd1770_name ( fdc ), data, addr );
+				"0x%02lx\n", fdc->name, data, addr );
 		break;
 	}
 }
@@ -1468,16 +1445,17 @@ static const BlockDevOps wd1770_block_ops = {
 };
 
 /**
- * Initialise 1770 FDC system bus device
+ * Initialise 1770 FDC
  *
- * @v busdev		System bus device
+ * @v fdc		1770 FDC
+ * @v name		Device name
  */
-static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
-	WD1770FDC *fdc = DO_UPCAST ( WD1770FDC, busdev, busdev );
+static void wd1770_core_init ( WD1770FDC *fdc, const char *name ) {
 	WD1770FDD *fdd;
 	unsigned int i;
 
 	/* Initialise FDC */
+	fdc->name = name;
 	fdc->buf = qemu_memalign ( BDRV_SECTOR_SIZE, WD1770_BUF_SIZE );
 	fdc->command_timer =
 		qemu_new_timer_ns ( vm_clock, wd1770_command_expired, fdc );
@@ -1495,51 +1473,12 @@ static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
 	}
 
 	/* Initialise memory region */
-	memory_region_init_io ( &fdc->mr, &wd1770_ops, fdc, "wd1770",
-				WD1770_SIZE );
-	sysbus_init_mmio ( busdev, &fdc->mr );
-
-	/* Initialise interrupts */
-	sysbus_init_irq ( busdev, &fdc->drq );
-	sysbus_init_irq ( busdev, &fdc->intrq );
+	memory_region_init_io ( &fdc->mr, &wd1770_ops, fdc, name, WD1770_SIZE );
 
 	/* Reset device */
 	wd1770_reset ( fdc );
-
-	return 0;
 }
 
-/**
- * Initialise 1770 FDC
- *
- * @v addr		Address
- * @v drq		Data request IRQ
- * @v intrq		Completion IRQ
- * @v fds		Floppy disk drive information
- * @ret fdc		1770 FDC
- */
-WD1770FDC * wd1770_init ( hwaddr addr, qemu_irq drq, qemu_irq intrq,
-			  DriveInfo **fds ) {
-	DeviceState *dev;
-	WD1770FDC *fdc;
-
-	/* Create device */
-	dev = qdev_create ( NULL, "wd1770" );
-	fdc = DO_UPCAST ( WD1770FDC, busdev.qdev, dev );
-	if ( fds[0] )
-		qdev_prop_set_drive_nofail ( dev, "driveA", fds[0]->bdrv );
-	if ( fds[1] )
-		qdev_prop_set_drive_nofail ( dev, "driveB", fds[1]->bdrv );
-	qdev_init_nofail ( dev );
-
-	/* Connect to system bus */
-	sysbus_mmio_map ( &fdc->busdev, 0, addr );
-	sysbus_connect_irq ( &fdc->busdev, 0, drq );
-	sysbus_connect_irq ( &fdc->busdev, 1, intrq );
-
-	return fdc;
-}
-			  
 /** Virtual machine state description (drive) */
 static const VMStateDescription vmstate_wd1770_fdd = {
 	.name = "wd1770fdd",
@@ -1578,34 +1517,137 @@ static const VMStateDescription vmstate_wd1770 = {
 	},
 };
 
-/** Properties */
-static Property wd1770_properties[] = {
+/**
+ * Create 1770 FDC embedded device
+ *
+ * @v mr		Memory region
+ * @v offset		Offset within memory region
+ * @v name		Name
+ * @v drq		Data request IRQ
+ * @v intrq		Completion IRQ
+ * @v block		Block devices
+ * @ret fdc		1770 FDC
+ */
+WD1770FDC * wd1770_create ( MemoryRegion *mr, hwaddr offset, const char *name,
+			    qemu_irq drq, qemu_irq intrq,
+			    BlockDriverState **block ) {
+	WD1770FDC *fdc = g_new0 ( WD1770FDC, 1 );
+	unsigned int i;
+
+	/* Associate block devices */
+	for ( i = 0 ; i < ARRAY_SIZE ( fdc->fdds ) ; i++ )
+		fdc->fdds[i].block = block[i];
+
+	/* Initialise device */
+	wd1770_core_init ( fdc, name );
+
+	/* Connect to embedded bus */
+	memory_region_add_subregion ( mr, offset, &fdc->mr );
+	fdc->drq = drq;
+	fdc->intrq = intrq;
+
+	/* Register virtual machine state */
+	vmstate_register ( NULL, offset, &vmstate_wd1770, fdc );
+
+	return fdc;
+}
+			  
+/**
+ * Initialise 1770 FDC system bus device
+ *
+ * @v busdev		System bus device
+ */
+static int wd1770_sysbus_init ( SysBusDevice *busdev ) {
+	WD1770FDCSysBus *fdc_sysbus =
+		DO_UPCAST ( WD1770FDCSysBus, busdev, busdev );
+	WD1770FDC *fdc = &fdc_sysbus->fdc;
+
+	/* Initialise 1770 FDC */
+	wd1770_core_init ( fdc, qdev_fw_name ( &busdev->qdev ) );
+
+	/* Register system bus memory region */
+	sysbus_init_mmio ( busdev, &fdc->mr );
+
+	/* Register system bus interrupts */
+	sysbus_init_irq ( busdev, &fdc->drq );
+	sysbus_init_irq ( busdev, &fdc->intrq );
+
+	return 0;
+}
+
+/**
+ * Create 1770 FDC system bus device
+ *
+ * @v addr		Address
+ * @v drq		Data request IRQ
+ * @v intrq		Completion IRQ
+ * @v block		Block devices
+ * @ret fdc		1770 FDC
+ */
+WD1770FDC * wd1770_sysbus_create ( hwaddr addr, qemu_irq drq, qemu_irq intrq,
+				   BlockDriverState **block ) {
+	DeviceState *qdev;
+	WD1770FDCSysBus *fdc_sysbus;
+	WD1770FDC *fdc;
+
+	/* Create device */
+	qdev = qdev_create ( NULL, TYPE_WD1770 );
+	fdc_sysbus = DO_UPCAST ( WD1770FDCSysBus, busdev.qdev, qdev );
+	fdc = &fdc_sysbus->fdc;
+	if ( block[0] )
+		qdev_prop_set_drive_nofail ( qdev, "driveA", block[0] );
+	if ( block[1] )
+		qdev_prop_set_drive_nofail ( qdev, "driveB", block[1] );
+	qdev_init_nofail ( qdev );
+
+	/* Connect to system bus */
+	sysbus_mmio_map ( &fdc_sysbus->busdev, 0, addr );
+	sysbus_connect_irq ( &fdc_sysbus->busdev, 0, drq );
+	sysbus_connect_irq ( &fdc_sysbus->busdev, 1, intrq );
+
+	return fdc;
+}
+
+/** 1770 FDC system bus device virtual machine state description */
+static const VMStateDescription vmstate_wd1770_sysbus = {
+	.name = "wd1770",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_STRUCT ( fdc, WD1770FDCSysBus, 0,
+				 vmstate_wd1770, WD1770FDC ),
+		VMSTATE_END_OF_LIST()
+	},
+};
+
+/** 1770 FDC system bus device properties */
+static Property wd1770_sysbus_properties[] = {
 	DEFINE_PROP_DRIVE ( "driveA", WD1770FDC, fdds[0].block ),
 	DEFINE_PROP_DRIVE ( "driveB", WD1770FDC, fdds[1].block ),
 	DEFINE_PROP_END_OF_LIST(),
 };
 
-/** Class initialiser */
-static void wd1770_class_init ( ObjectClass *class, void *data ) {
+/** 1770 FDC system bus device class initialiser */
+static void wd1770_sysbus_class_init ( ObjectClass *class, void *data ) {
 	DeviceClass *dc = DEVICE_CLASS ( class );
 	SysBusDeviceClass *busdev_class = SYS_BUS_DEVICE_CLASS ( class );
 
 	busdev_class->init = wd1770_sysbus_init;
-	dc->vmsd = &vmstate_wd1770;
-	dc->props = wd1770_properties;
+	dc->vmsd = &vmstate_wd1770_sysbus;
+	dc->props = wd1770_sysbus_properties;
 }
 
-/** Type information */
-static TypeInfo wd1770_info = {
-	.name = "wd1770",
+/** 1770 FDC system bus device type information */
+static TypeInfo wd1770_sysbus_info = {
+	.name = TYPE_WD1770,
 	.parent = TYPE_SYS_BUS_DEVICE,
-	.instance_size = sizeof ( WD1770FDC ),
-	.class_init = wd1770_class_init,
+	.instance_size = sizeof ( WD1770FDCSysBus ),
+	.class_init = wd1770_sysbus_class_init,
 };
 
 /** Type registrar */
 static void wd1770_register_types ( void ) {
-	type_register_static ( &wd1770_info );
+	type_register_static ( &wd1770_sysbus_info );
 }
 
 /** Type initialiser */

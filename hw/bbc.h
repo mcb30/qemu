@@ -20,10 +20,10 @@
 #ifndef HW_BBC_H
 #define HW_BBC_H
 
+#include "sysbus.h"
 #include "mc6845.h"
 #include "mc6850.h"
 #include "m6522.h"
-#include "wd1770.h"
 
 #define BBC_B_RAM_SIZE 0x8000
 #define BBC_B_MOS_FILENAME "OS12.ROM"
@@ -91,20 +91,11 @@
 #define BBC_LATCH_CAPS_LOCK 6
 #define BBC_LATCH_SHIFT_LOCK 7
 
-/* Floppy disc controller */
-#define BBC_1770_FDC_CONTROL_OFFSET 0x00
-#define BBC_1770_FDC_CONTROL_SIZE 0x04
-#define BBC_1770_FDC_WD1770_OFFSET 0x04
-#define BBC_1770_FDC_WD1770_SIZE 0x04
-#define BBC_1770_FDC_SIZE 0x08
+/** Floppy disc controller host bridge size */
+#define BBC_FDC_HOST_SIZE 0x08
 
-/* Floppy disc control register */
-#define BBC_1770_FDC_DRIVE_MASK 0x03
-#define BBC_1770_FDC_DRIVE_0 0x01
-#define BBC_1770_FDC_DRIVE_1 0x02
-#define BBC_1770_FDC_SIDE_1 0x04
-#define BBC_1770_FDC_SINGLE_DENSITY 0x08
-#define BBC_1770_FDC_NOT_MASTER_RESET 0x20
+/** Number of drives attached to floppy disc controller */
+#define BBC_FDC_DRIVE_COUNT 2
 
 /* DFS standard disc layout */
 #define BBC_DFS_SECTORS 10
@@ -293,20 +284,67 @@ typedef struct {
 	BBCParallel parallel;
 } BBCUserVIA;
 
+typedef struct BBCFDCHost BBCFDCHost;
+
 /**
- * BBC 1770 floppy disc controller
+ * Floppy disc controller bus (i.e. devices attached to the 8271 socket)
  */
 typedef struct {
-	/** Name */
-	const char *name;
+	/** QEMU bus */
+	BusState qbus;
+	/** Number of attached devices */
+	unsigned int attached;
+	/** Host bridge */
+	BBCFDCHost *host;
+} BBCFDCBus;
+
+/**
+ * Floppy disc controller host bridge (i.e. the 8271 socket itself)
+ */
+struct BBCFDCHost {
+	/** System bus device */
+	SysBusDevice busdev;
+	/** FDC bus */
+	BBCFDCBus *bus;
 	/** Memory region */
 	MemoryRegion mr;
-	/** WD1770 FDC */
-	WD1770FDC *fdc;
+	/** Data request IRQ */
+	qemu_irq drq;
+	/** Completion IRQ */
+	qemu_irq intrq;
+	/** Block devices */
+	BlockDriverState *block[2];
+};
 
-	/** Control register */
-	uint8_t control;
-} BBC1770FDC;
+/** Floppy disc controller bus type name */
+#define TYPE_BBC_FDC_BUS "bbc-fdc-bus"
+
+/** Floppy disc controller host bridge type name */
+#define TYPE_BBC_FDC_HOST "bbc-fdc"
+
+/** Floppy disc controller device type name */
+#define TYPE_BBC_FDC_DEVICE "bbc-fdc-device"
+#define BBC_FDC_DEVICE( obj )						\
+	OBJECT_CHECK ( BBCFDCDevice, (obj), TYPE_BBC_FDC_DEVICE )
+#define BBC_FDC_DEVICE_CLASS( class )					\
+	OBJECT_CLASS_CHECK ( BBCFDCDeviceClass, (class), TYPE_BBC_FDC_DEVICE )
+#define BBC_FDC_DEVICE_GET_CLASS( obj )					\
+	OBJECT_GET_CLASS ( BBCFDCDeviceClass, (obj), TYPE_BBC_FDC_DEVICE )
+
+/** Floppy disc controller device */
+typedef struct {
+	/** QEMU device */
+	DeviceState qdev;
+} BBCFDCDevice;
+
+/** Floppy disc controller device class */
+typedef struct {
+	/** Parent device class */
+	DeviceClass parent_class;
+	/** Initialise device */
+	int ( * init ) ( BBCFDCDevice *dev, MemoryRegion *mr, qemu_irq drq,
+			 qemu_irq intrq, BlockDriverState **block );
+} BBCFDCDeviceClass;
 
 /**
  * Econet controller
@@ -358,8 +396,8 @@ enum bbc_nmi_sources {
  * BBC micro
  */
 typedef struct {
-	/** QEMU device */
-	DeviceState qdev;
+	/** System bus device (used only for properties) */
+	SysBusDevice busdev;
 	/** CPU */
 	CPUM6502State *cpu;
 	/** RAM */
@@ -398,8 +436,8 @@ typedef struct {
 	BBCSystemVIA *system_via;
 	/** User VIA */
 	BBCUserVIA *user_via;
-	/** Floppy disc controller */
-	BBC1770FDC *fdc;
+	/** Floppy disc controller host bridge */
+	BBCFDCHost *fdc;
 	/** Econet controller */
 	BBCEconet *econet;
 	/** Analogue to digital converter */

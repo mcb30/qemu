@@ -23,7 +23,6 @@
 #include "sysemu/sysemu.h"
 #include "ui/console.h"
 #include "char/char.h"
-#include "block/block_int.h"
 #include "loader.h"
 #include "bbc.h"
 
@@ -44,7 +43,7 @@
  */
 static inline const char * bbc_name ( BBCMicro *bbc ) {
 
-	return qdev_fw_name ( &bbc->qdev );
+	return qdev_fw_name ( &bbc->busdev.qdev );
 }
 
 /******************************************************************************
@@ -1476,231 +1475,192 @@ static BBCUserVIA * bbc_user_via_init ( hwaddr addr, uint64_t size,
 
 /******************************************************************************
  *
- * 1770 floppy disc controller (SHEILA &80-&9F)
+ * Floppy disc controller (SHEILA &80-&9F)
  *
+ * The original BBC Micro has a socket for an Intel 8271 controller.
+ * Many manufacturers created daughter boards to plug into this
+ * socket, utilising a different controller chip.
+ *
+ * We model this as a "BBC FDC host bridge" (representing the 8271
+ * socket) which exposes a "BBC FDC bus", to which at most one of
+ * several controller devices (e.g. a WD1770-based daughterboard) can
+ * then be attached.  This allows the actual FDC controller to be
+ * specified via the QEMU device model (using e.g. "-device bbc1770").
  */
 
 /**
- * Guess disk geometry
+ * Initialise FDC device
  *
- * @v opaque		1770 FDC
- * @v fdd		FDD
+ * @v qdev		QEMU device
  * @ret rc		Return status
  */
-static int bbc_1770_fdc_guess_geometry ( void *opaque, WD1770FDD *fdd ) {
-	BBC1770FDC *fdc = opaque;
-	static const uint8_t try_tracks[] = { 80, 40 };
-	static const uint8_t try_sides[] = { 2, 1 };
-	static const uint8_t try_sectors[] = { 18, 16, 10 };
-	char *filename;
-	char *suffix;
-	int64_t length;
-	unsigned int cyl_size;
-	unsigned int i;
-	unsigned int j;
-	unsigned int k;
+static int bbc_fdc_qdev_init ( DeviceState *qdev ) {
+	BBCFDCDevice *fdc = BBC_FDC_DEVICE ( qdev );
+	BBCFDCDeviceClass *fdc_class = BBC_FDC_DEVICE_GET_CLASS ( fdc );
+	BBCFDCBus *bus;
+	BBCFDCHost *host;
+	int rc;
 
-	/* Get size of block device */
-	length = bdrv_getlength ( fdd->block );
-	if ( length < 0 ) {
-		LOG_BBC ( "%s: could not determine length for %s\n",
-			  fdc->name, bdrv_get_device_name ( fdd->block ) );
+	/* Attach device to bus */
+	bus = FROM_QBUS ( BBCFDCBus, qdev_get_parent_bus ( qdev ) );
+	if ( bus->attached ) {
+		error_report ( "%s: cannot attach more than one FDC",
+			       qdev_fw_name ( qdev ) );
 		return -1;
 	}
+	bus->attached++;
+	host = bus->host;
 
-	/* Determine file suffix, if any */
-	filename = fdd->block->filename;
-	if ( filename ) {
-		suffix = strrchr ( filename, '.' );
-		if ( suffix )
-			suffix++;
-	} else {
-		suffix = NULL;
+	/* Initialise device */
+	if ( fdc_class->init ) {
+		rc = fdc_class->init ( fdc, &host->mr, host->drq, host->intrq,
+				       host->block );
+		if ( rc != 0 )
+			return rc;
 	}
 
-	/* Treat ".ssd" and ".dsd" filename suffixes as being in the
-	 * standard single-density format common to downloadable
-	 * images.
-	 */
-	if ( suffix && ( ( strcasecmp ( suffix, "ssd" ) == 0 ) ||
-			 ( strcasecmp ( suffix, "dsd" ) == 0 ) ) ) {
-		fdd->single_density = true;
-		fdd->sides = ( ( tolower ( suffix[0] ) == 's' ) ? 1 : 2 );
-		fdd->sectors = BBC_DFS_SECTORS;
-		fdd->sector_size = BBC_DFS_SECTOR_SIZE;
-		cyl_size = ( fdd->sides * fdd->sectors * fdd->sector_size );
-		fdd->tracks = ( ( length + cyl_size - 1 ) / cyl_size );
-		return 0;
-	}
-
-	/* Otherwise, try various standard geometry combinations to
-	 * see if one matches the size.
-	 */
-	fdd->sector_size = BBC_DFS_SECTOR_SIZE;
-	for ( i = 0 ; i < ARRAY_SIZE ( try_tracks ) ; i++ ) {
-		fdd->tracks = try_tracks[i];
-		for ( j = 0 ; j < ARRAY_SIZE ( try_sides ) ; j++ ) {
-			fdd->sides = try_sides[j];
-			for ( k = 0 ; k < ARRAY_SIZE ( try_sectors ) ; k++ ) {
-				fdd->sectors = try_sectors[k];
-				fdd->single_density =
-					( fdd->sectors == BBC_DFS_SECTORS );
-				if ( ( fdd->sides * fdd->tracks *
-				       fdd->sectors * fdd->sector_size )
-				     == length ) {
-					return 0;
-				}
-			}
-		}
-	}
-
-	return -1;
+	return 0;
 }
 
-/** 1770 FDC 1770 operations */
-static WD1770Ops bbc_1770_fdc_1770_ops = {
-	.guess_geometry = bbc_1770_fdc_guess_geometry,
+/** FDC device class initialiser */
+static void bbc_fdc_device_class_init ( ObjectClass *oc, void *data ) {
+	DeviceClass *dc = DEVICE_CLASS ( oc );
+
+	dc->init = bbc_fdc_qdev_init;
+	dc->bus_type = TYPE_BBC_FDC_BUS;
+}
+
+/** FDC device type information */
+static TypeInfo bbc_fdc_device_info = {
+	.name = TYPE_BBC_FDC_DEVICE,
+	.parent = TYPE_DEVICE,
+	.instance_size = sizeof ( BBCFDCDevice ),
+	.abstract = true,
+	.class_size = sizeof ( BBCFDCDeviceClass ),
+	.class_init = bbc_fdc_device_class_init,
+};
+
+/** FDC bus type information */
+static const TypeInfo bbc_fdc_bus_info = {
+	.name = TYPE_BBC_FDC_BUS,
+	.parent = TYPE_BUS,
+	.instance_size = sizeof ( BBCFDCBus ),
 };
 
 /**
- * Read from 1770 FDC control register
+ * Initialise FDC host controller system bus device
  *
- * @v opaque		1770 FDC
- * @v addr		Register address
- * @v size		Size of read
- * @ret data		Read data
+ * @v busdev		System bus device
+ * @ret rc		Return status
  */
-static uint64_t bbc_1770_fdc_read ( void *opaque, hwaddr addr,
-				    unsigned int size ) {
+static int bbc_fdc_host_sysbus_init ( SysBusDevice *busdev ) {
+	BBCFDCHost *host = FROM_SYSBUS ( BBCFDCHost, busdev );
+	BBCFDCBus *bus;
 
-	/* This is a write-only register */
-	return 0xff;
+	/* Create bus */
+	bus = FROM_QBUS ( BBCFDCBus, qbus_create ( TYPE_BBC_FDC_BUS,
+						   &busdev->qdev, NULL ) );
+	bus->host = host;
+	host->bus = bus;
+
+	/* Initialise memory region */
+	memory_region_init ( &host->mr, qdev_fw_name ( &busdev->qdev ),
+			     BBC_FDC_HOST_SIZE );
+	sysbus_init_mmio ( busdev, &host->mr );
+
+	/* Initialise interrupts */
+	sysbus_init_irq ( busdev, &host->drq );
+	sysbus_init_irq ( busdev, &host->intrq );
+
+	return 0;
 }
 
 /**
- * Write to 1770 FDC control register
- *
- * @v opaque		1770 FDC
- * @v addr		Register address
- * @v data64		Data to write
- * @v size		Size of write
- */
-static void bbc_1770_fdc_write ( void *opaque, hwaddr addr, uint64_t data64,
-				 unsigned int size ) {
-	BBC1770FDC *fdc = opaque;
-	uint8_t data = data64;
-	int drive;
-	unsigned int side;
-	bool single_density;
-	bool master_reset;
-
-	/* Write to control register */
-	fdc->control = data;
-	LOG_BBC ( "%s: control register (&%02lX) set to &%02X\n",
-		  fdc->name, addr, data );
-
-	/* Select drive number */
-	switch ( data & BBC_1770_FDC_DRIVE_MASK ) {
-	case 0:
-		/* No drive selected */
-		drive = WD1770_NO_DRIVE;
-		break;
-	case BBC_1770_FDC_DRIVE_0:
-		drive = 0;
-		break;
-	case BBC_1770_FDC_DRIVE_1:
-		drive = 1;
-		break;
-	default:
-		/* Invalid combination */
-		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented simultaneous "
-				"operation of both drives\n", fdc->name );
-		drive = WD1770_NO_DRIVE;
-		break;
-	}
-	wd1770_set_drive ( fdc->fdc, drive );
-
-	/* Decode side number */
-	side = ( ( data & BBC_1770_FDC_SIDE_1 ) ? 1 : 0 );
-	wd1770_set_side ( fdc->fdc, side );
-
-	/* Decode density */
-	single_density = ( !! ( data & BBC_1770_FDC_SINGLE_DENSITY ) );
-	wd1770_set_single_density ( fdc->fdc, single_density );
-
-	/* Decode master reset.  This line is supposed to be
-	 * level-sensitive; the real hardware would be held in reset
-	 * while the line remained active.
-	 */
-	master_reset = ( ! ( data & BBC_1770_FDC_NOT_MASTER_RESET ) );
-	if ( master_reset )
-		wd1770_reset ( fdc->fdc );
-}
-
-/** 1770 FDC operations */
-static const MemoryRegionOps bbc_1770_fdc_ops = {
-	.read = bbc_1770_fdc_read,
-	.write = bbc_1770_fdc_write,
-};
-
-/** 1770 FDC state description */
-static const VMStateDescription vmstate_bbc_1770_fdc = {
-	.name = "bbc_1770_fdc",
-	.version_id = 1,
-	.minimum_version_id = 1,
-	.fields = ( VMStateField[] ) {
-		VMSTATE_UINT8 ( control, BBC1770FDC ),
-		VMSTATE_END_OF_LIST()
-	},
-};
-
-/**
- * Initialise 1770 FDC
+ * Initialise FDC host controller
  *
  * @v addr		Address
  * @v size		Size
  * @v name		Device name
  * @v drq		Data request non-maskable interrupt request line
  * @v intrq		Completion non-maskable interrupt request line
- * @ret fdc		1770 FDC
+ * @ret fdc		FDC
  */
-static BBC1770FDC * bbc_1770_fdc_init ( hwaddr addr, uint64_t size,
-					const char *name, CPUM6502State *cpu,
-					qemu_irq drq, qemu_irq intrq ) {
-	MemoryRegion *address_space_mem = get_system_memory();
-	BBC1770FDC *fdc = g_new0 ( BBC1770FDC, 1 );
-	DriveInfo *fds[WD1770_DRIVE_COUNT];
+static BBCFDCHost * bbc_fdc_host_init ( hwaddr addr, uint64_t size,
+					const char *name, qemu_irq drq,
+					qemu_irq intrq ) {
+	DeviceState *qdev;
+	BBCFDCHost *host;
+	DriveInfo *fds[BBC_FDC_DRIVE_COUNT];
 	unsigned int i;
 
-	/* The memory map for this peripheral is a little strange.
-	 * The BBC was originally designed to take an Intel 8271 FDC,
-	 * occupying eight bytes of address space.  The WD1770 FDC was
-	 * mapped in to the latter four byte of this address space,
-	 * with the first four bytes being occupied by a 74LS174 hex
-	 * D-type which provides additional signals to the WD1770.
-	 */
-
-	/* Initialise 1770 FDC */
-	fdc->name = name;
+	/* Get drives */
 	for ( i = 0 ; i < ARRAY_SIZE ( fds ) ; i++ )
 		fds[i] = drive_get ( IF_FLOPPY, 0, i );
-	fdc->fdc = wd1770_init ( ( addr + BBC_1770_FDC_WD1770_OFFSET ),
-				 drq, intrq, fds );
-	wd1770_set_ops ( fdc->fdc, &bbc_1770_fdc_1770_ops, fdc );
 
-	/* Register memory region */
-	memory_region_init_io ( &fdc->mr, &bbc_1770_fdc_ops, fdc, fdc->name,
-				BBC_1770_FDC_CONTROL_SIZE );
-	memory_region_add_subregion ( address_space_mem, addr, &fdc->mr );
-	bbc_io_alias_offset ( &fdc->mr, addr, size, 0, BBC_1770_FDC_SIZE );
-	bbc_io_alias_offset ( &fdc->fdc->mr, addr, size,
-			      BBC_1770_FDC_WD1770_OFFSET, BBC_1770_FDC_SIZE );
+	/* Create host bridge */
+	qdev = qdev_create ( NULL, TYPE_BBC_FDC_HOST );
+	host = DO_UPCAST ( BBCFDCHost, busdev.qdev, qdev );
+	if ( fds[0] )
+		qdev_prop_set_drive_nofail ( qdev, "driveA", fds[0]->bdrv );
+	if ( fds[1] )
+		qdev_prop_set_drive_nofail ( qdev, "driveB", fds[1]->bdrv );
+	qdev_init_nofail ( qdev );
 
-	/* Register virtual machine state */
-	vmstate_register ( NULL, addr, &vmstate_bbc_1770_fdc, fdc );
+	/* Connect to system bus */
+	sysbus_mmio_map ( &host->busdev, 0, addr );
+	sysbus_connect_irq ( &host->busdev, 0, drq );
+	sysbus_connect_irq ( &host->busdev, 1, intrq );
 
-	return fdc;
+	/* Create memory region aliases */
+	bbc_io_alias ( &host->mr, addr, size );
+
+	return host;
 }
+
+/** FDC host bridge state description */
+static const VMStateDescription vmstate_bbc_fdc_host = {
+	.name = "bbc-fdc-host",
+	.version_id = 1,
+	.minimum_version_id = 1,
+	.fields = ( VMStateField[] ) {
+		VMSTATE_END_OF_LIST()
+	},
+};
+
+/** FDC host bridge properties */
+static Property bbc_fdc_host_properties[] = {
+	DEFINE_PROP_DRIVE ( "driveA", BBCFDCHost, block[0] ),
+	DEFINE_PROP_DRIVE ( "driveB", BBCFDCHost, block[1] ),
+	DEFINE_PROP_END_OF_LIST(),
+};
+
+/** FDC host bridge class initialiser */
+static void bbc_fdc_host_class_init ( ObjectClass *class, void *data ) {
+	DeviceClass *dc = DEVICE_CLASS ( class );
+	SysBusDeviceClass *sysbus_class = SYS_BUS_DEVICE_CLASS ( class );
+
+	dc->props = bbc_fdc_host_properties;
+	dc->vmsd = &vmstate_bbc_fdc_host;
+	sysbus_class->init = bbc_fdc_host_sysbus_init;
+}
+
+/** FDC host bridge type information */
+static const TypeInfo bbc_fdc_host_info = {
+	.name = TYPE_BBC_FDC_HOST,
+	.parent = TYPE_SYS_BUS_DEVICE,
+	.instance_size = sizeof ( BBCFDCHost ),
+	.class_init = bbc_fdc_host_class_init,
+};
+
+/** Type registrar */
+static void bbc_fdc_register_types ( void ) {
+	type_register_static ( &bbc_fdc_host_info );
+	type_register_static ( &bbc_fdc_bus_info );
+	type_register_static ( &bbc_fdc_device_info );
+}
+
+/** Type initialiser */
+type_init ( bbc_fdc_register_types )
 
 /******************************************************************************
  *
@@ -1993,10 +1953,9 @@ static void bbc_io_init ( BBCMicro *bbc ) {
 					    bbc->irq[BBC_IRQ_USER_VIA],
 					    parallel_hds[0] );
 
-	/* Initialise floppy disc controller */
-	bbc->fdc = bbc_1770_fdc_init ( BBC_SHEILA_FDC_BASE,
-				       BBC_SHEILA_FDC_SIZE, "fdc", bbc->cpu,
-				       bbc->nmi[BBC_NMI_FDC_DRQ],
+	/* Initialise floppy disc controller host bridge */
+	bbc->fdc = bbc_fdc_host_init ( BBC_SHEILA_FDC_BASE, BBC_SHEILA_FDC_SIZE,
+				       "fdc", bbc->nmi[BBC_NMI_FDC_DRQ],
 				       bbc->nmi[BBC_NMI_FDC_INTRQ] );
 
 	/* Initialise Econet controller */
@@ -2035,7 +1994,7 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 
 	/* Initialise machine */
 	qdev = qdev_create ( NULL, "bbc" );
-	bbc = DO_UPCAST ( BBCMicro, qdev, qdev );
+	bbc = DO_UPCAST ( BBCMicro, busdev.qdev, qdev );
 	qdev_init_nofail ( qdev );
 
 	/* Initialise RAM */
@@ -2080,8 +2039,8 @@ machine_init ( bbc_machine_init );
  *
  */
 
-/** QEMU device initialiser */
-static int bbc_qdev_init ( DeviceState *qdev ) {
+/** BBC Micro system bus dummy device initialiser */
+static int bbc_sysbus_init ( SysBusDevice *busdev ) {
 	return 0;
 }
 
@@ -2109,8 +2068,9 @@ static Property bbc_properties[] = {
 /** Class initialiser */
 static void bbc_class_init ( ObjectClass *class, void *data ) {
 	DeviceClass *dc = DEVICE_CLASS ( class );
+	SysBusDeviceClass *busdev_class = SYS_BUS_DEVICE_CLASS ( class );
 
-	dc->init = bbc_qdev_init;
+	busdev_class->init = bbc_sysbus_init;
 	dc->vmsd = &vmstate_bbc;
 	dc->props = bbc_properties;
 }
@@ -2118,7 +2078,7 @@ static void bbc_class_init ( ObjectClass *class, void *data ) {
 /** Type information */
 static TypeInfo bbc_info = {
 	.name = "bbc",
-	.parent = TYPE_DEVICE,
+	.parent = TYPE_SYS_BUS_DEVICE,
 	.instance_size = sizeof ( BBCMicro ),
 	.class_init = bbc_class_init,
 };

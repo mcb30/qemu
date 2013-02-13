@@ -141,8 +141,8 @@ typedef struct {
 
 /** 1770 FDC */
 struct WD1770FDC {
-	/** System bus device */
-	SysBusDevice busdev;
+	/** Name */
+	const char *name;
 	/** Memory region */
 	MemoryRegion mr;
 	/** Data request IRQ */
@@ -191,6 +191,14 @@ struct WD1770FDC {
 	uint32_t remaining;
 };
 
+/** 1770 FDC system bus device */
+typedef struct {
+	/** System bus device */
+	SysBusDevice busdev;
+	/** 1770 FDC */
+	WD1770FDC fdc;
+} WD1770FDCSysBus;
+
 /** Size of memory region */
 #define WD1770_SIZE 0x04
 
@@ -221,12 +229,19 @@ struct WD1770FDC {
 #define WD1770_STAT_PROTECTED 0x40
 #define WD1770_STAT_MOTOR_ON 0x80
 
+/** WD1770 type name */
+#define TYPE_WD1770 "wd1770"
+
 extern void wd1770_reset ( WD1770FDC *fdc );
 extern void wd1770_set_drive ( WD1770FDC *fdc, int drive );
 extern void wd1770_set_side ( WD1770FDC *fdc, unsigned int side );
 extern void wd1770_set_single_density ( WD1770FDC *fdc, bool single_density );
 extern void wd1770_set_ops ( WD1770FDC *fdc, WD1770Ops *ops, void *opaque );
-extern WD1770FDC * wd1770_init ( hwaddr addr, qemu_irq drq, qemu_irq intrq,
-				 DriveInfo **fds );
+extern WD1770FDC * wd1770_create ( MemoryRegion *mr, hwaddr offset,
+				   const char *name, qemu_irq drq,
+				   qemu_irq intrq, BlockDriverState **block );
+extern WD1770FDC * wd1770_sysbus_create ( hwaddr addr, qemu_irq drq,
+					  qemu_irq intrq,
+					  BlockDriverState **block );
 
 #endif

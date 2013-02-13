@@ -20,6 +20,8 @@
 #ifndef HW_BBC_CRT_H
 #define HW_BBC_CRT_H
 
+#include "ui/qemu-pixman.h"
+
 /** CRT pixel clock speed (in log2(MHz))
  *
  * CRTs don't actually have a defined horizontal resolution.  We use a
