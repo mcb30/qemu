@@ -25,6 +25,7 @@
 #include "char/char.h"
 #include "loader.h"
 #include "bbc.h"
+#include "bbc_1770.h"
 
 #define DEBUG_BBC 1
 
@@ -462,6 +463,55 @@ static BBCPagedROM * bbc_paged_rom_init ( hwaddr addr, uint64_t size,
 }
 
 /**
+ * Get paged ROM title string
+ *
+ * @v paged		Paged ROM
+ * @v page		Page
+ * @ret title		Title string
+ */
+static inline const char * bbc_paged_rom_title ( BBCPagedROM *paged,
+						 unsigned int page ) {
+	hwaddr targphys = bbc_paged_rom_targphys ( paged, page );
+
+	return rom_ptr ( targphys + BBC_PAGED_ROM_TITLE );
+}
+
+/**
+ * Get paged ROM version string
+ *
+ * @v paged		Paged ROM
+ * @v page		Page
+ * @ret version		Versions string
+ */
+static inline const char * bbc_paged_rom_version ( BBCPagedROM *paged,
+						   unsigned int page ) {
+	const char *title;
+
+	title = bbc_paged_rom_title ( paged, page );
+	if ( ! title )
+		return NULL;
+	return ( title + strlen ( title ) + 1 );
+}
+
+/**
+ * Get paged ROM copyright string
+ *
+ * @v paged		Paged ROM
+ * @v page		Page
+ * @ret copyright	Copyright string
+ */
+static inline const char * bbc_paged_rom_copyright ( BBCPagedROM *paged,
+						     unsigned int page ) {
+	hwaddr targphys = bbc_paged_rom_targphys ( paged, page );
+	uint8_t *offset;
+
+	offset = rom_ptr ( targphys + BBC_PAGED_ROM_COPYRIGHT_OFFSET );
+	if ( ! offset )
+		return NULL;
+	return rom_ptr ( targphys + *offset + 1 );
+}
+
+/**
  * Load paged ROM
  *
  * @v paged		Paged ROM
@@ -476,6 +526,10 @@ static void bbc_paged_rom_load ( BBCPagedROM *paged, unsigned int page,
 	bbc_load_rom ( &paged->roms, bbc_paged_rom_offset ( paged, page ),
 		       bbc_paged_rom_targphys ( paged, page ), paged->size,
 		       name, filename );
+	LOG_BBC ( "%s: ROM %d is \"%s\" version \"%s\" copyright \"%s\"\n",
+		  paged->name, page, bbc_paged_rom_title ( paged, page ),
+		  bbc_paged_rom_version ( paged, page ),
+		  bbc_paged_rom_copyright ( paged, page ) );
 }
 
 /******************************************************************************
@@ -1560,6 +1614,7 @@ static int bbc_fdc_host_sysbus_init ( SysBusDevice *busdev ) {
 	/* Create bus */
 	bus = FROM_QBUS ( BBCFDCBus, qbus_create ( TYPE_BBC_FDC_BUS,
 						   &busdev->qdev, NULL ) );
+	bus->qbus.allow_hotplug = 1; /* For auto-detection */
 	bus->host = host;
 	host->bus = bus;
 
@@ -1661,6 +1716,78 @@ static void bbc_fdc_register_types ( void ) {
 
 /** Type initialiser */
 type_init ( bbc_fdc_register_types )
+
+/**
+ * Determine required floppy disc controller type from DFS ROM
+ *
+ * @v paged		Paged ROM
+ * @ret type		Floppy disc controller type, or NULL
+ */
+static const char * bbc_fdc_dfs_type ( BBCPagedROM *paged ) {
+	unsigned int i;
+	unsigned int page;
+	const char *title;
+	const char *version;
+	const char *copyright;
+
+	/* Scan through paged ROMs looking for known DFS ROMs */
+	for ( i = 0 ; i < paged->count ; i++ ) {
+		page = ( paged->count - i - 1 );
+		title = bbc_paged_rom_title ( paged, page );
+		version = bbc_paged_rom_version ( paged, page );
+		copyright = bbc_paged_rom_copyright ( paged, page );
+		if ( ! title )
+			continue;
+
+		/* Check for Acorn ADFS */
+		if ( strstr ( copyright, "Acorn" ) &&
+		     strstr ( title, "ADFS" ) ) {
+			return TYPE_BBC1770_ACORN;
+		}
+
+		/* Check for Acorn DFS 2.00+ (1770-based) */
+		if ( strstr ( copyright, "Acorn" ) &&
+		     strstr ( title, "DFS" ) &&
+		     ( version[0] == '2' ) ) {
+			return TYPE_BBC1770_ACORN;
+		}
+
+		/* Check for Watford DDFS */
+		if ( strstr ( copyright, "A.C.Bray" ) &&
+		     strstr ( title, "DDFS" ) ) {
+			return TYPE_BBC1770_ACORN;
+		}
+
+		/* Check for Opus DDFS */
+		if ( strstr ( copyright, "Slogger" ) &&
+		     strstr ( title, "DDOS" ) ) {
+			return TYPE_BBC1770_OPUS;
+		}
+	}
+
+	return NULL;
+}
+
+/**
+ * Auto-detect floppy disc controller type from DFS ROM
+ *
+ * @v paged		Paged ROM
+ * @v fdcbus		FDC bus
+ */
+static void bbc_fdc_auto_detect ( BBCPagedROM *paged, BBCFDCBus *fdcbus ) {
+	const char *type;
+	DeviceState *qdev;
+
+	/* Determine type based upon DFS ROM */
+	type = bbc_fdc_dfs_type ( paged );
+	if ( ! type )
+		return;
+	LOG_BBC ( "%s: auto-detected FDC \"%s\"\n", paged->name, type );
+
+	/* Create floppy disc controller */
+	qdev = qdev_create ( &fdcbus->qbus, type );
+	qdev_init_nofail ( qdev );
+}
 
 /******************************************************************************
  *
@@ -1831,6 +1958,26 @@ static BBCTube * bbc_tube_init ( hwaddr addr, uint64_t size,
 	tube->unimp = bbc_unimplemented_init ( addr, size, name );
 
 	return tube;
+}
+
+/******************************************************************************
+ *
+ * Reset
+ *
+ */
+
+/**
+ * Reset machine
+ *
+ * @v opaque		BBC micro
+ */
+static void bbc_reset ( void *opaque ) {
+	BBCMicro *bbc = opaque;
+	BBCFDCBus *fdcbus = bbc->fdc->bus;
+
+	/* Try auto-detecting floppy disc controller, if none is present */
+	if ( fdcbus->attached == 0 )
+		bbc_fdc_auto_detect ( bbc->paged, fdcbus );
 }
 
 /******************************************************************************
@@ -2014,6 +2161,9 @@ static void bbcb_init ( QEMUMachineInitArgs *args ) {
 
 	/* Initialise display */
 	bbc_display_init ( bbc );
+
+	/* Register reset function */
+	qemu_register_reset ( bbc_reset, bbc );
 }
 
 /** BBC Model B */

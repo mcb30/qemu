@@ -331,7 +331,7 @@ static void opus1770_class_init ( ObjectClass *class, void *data ) {
 
 /** Acorn 1770 FDC information */
 static TypeInfo acorn1770_info = {
-	.name = "acorn1770",
+	.name = TYPE_BBC1770_ACORN,
 	.parent = TYPE_BBC_FDC_DEVICE,
 	.instance_size = sizeof ( BBC1770FDC ),
 	.class_init = acorn1770_class_init,
@@ -339,7 +339,7 @@ static TypeInfo acorn1770_info = {
 
 /** Opus 1770 FDC information */
 static TypeInfo opus1770_info = {
-	.name = "opus1770",
+	.name = TYPE_BBC1770_OPUS,
 	.parent = TYPE_BBC_FDC_DEVICE,
 	.instance_size = sizeof ( BBC1770FDC ),
 	.class_init = opus1770_class_init,

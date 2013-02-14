@@ -104,5 +104,9 @@ typedef struct {
 	uint32_t config;
 } BBC1770FDC;
 
+/* Known BBC 1770 floppy disc controller types */
+#define TYPE_BBC1770_ACORN "acorn1770"
+#define TYPE_BBC1770_OPUS "opus1770"
+
 #endif
 
