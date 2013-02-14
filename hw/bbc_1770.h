@@ -23,19 +23,67 @@
 #include "wd1770.h"
 
 /* Floppy disc controller */
-#define BBC1770_CONTROL_OFFSET 0x00
+#define BBC1770_OFFSET_LOW 0x00
+#define BBC1770_OFFSET_HIGH 0x04
 #define BBC1770_CONTROL_SIZE 0x04
-#define BBC1770_WD1770_OFFSET 0x04
 #define BBC1770_WD1770_SIZE 0x04
 #define BBC1770_SIZE 0x08
 
-/* Floppy disc control register */
-#define BBC1770_DRIVE_MASK 0x03
-#define BBC1770_DRIVE_0 0x01
-#define BBC1770_DRIVE_1 0x02
-#define BBC1770_SIDE_1 0x04
-#define BBC1770_SINGLE_DENSITY 0x08
-#define BBC1770_NOT_MASTER_RESET 0x20
+/**
+ * Control register bit names
+ *
+ * These values show up in the user-visible "controls" property; do
+ * not reassign values.
+ */
+enum {
+	BBC1770_CTRL_DRIVE0	= 0x00,
+	BBC1770_CTRL_DRIVE1	= 0x04,
+	BBC1770_CTRL_SIDE1	= 0x08,
+	BBC1770_CTRL_DOUBLE	= 0x0c,
+	BBC1770_CTRL_RESET	= 0x10,
+};
+
+/**
+ * Define a control register bit
+ *
+ * @v name		Control register bit name
+ * @v bit		Bit number within control register
+ * @v inverted		Bit is inverted
+ * @ret control		Control register bit definition (ORed into "controls")
+ */
+#define BBC1770_CTRL( name, bit, active_low ) \
+	( ( ( (active_low) << 3 ) | bit ) << (name) )
+
+/**
+ * Get control register bit position
+ *
+ * @v controls		Control register bit definitions
+ * @v name		Control register bit name
+ * @ret bit		Bit number within control register
+ */
+#define BBC1770_CTRL_BIT( controls, name ) \
+	( ( (controls) >> (name) ) & 0x07 )
+
+/**
+ * Get control register bit invertedness
+ *
+ * @v controls		Control register bit definitions
+ * @v name		Control register bit name
+ * @ret inverted	Bit is inverted
+ */
+#define BBC1770_CTRL_INVERTED( controls, name ) \
+	( ( (controls) >> ( 3 + (name) ) ) & 0x01 )
+
+/**
+ * Configuration bits   
+ *
+ * These values show up in the user-visible "config" property; do not
+ * reassign values.
+ */
+enum {
+	BBC1770_CFG_CTRL_HIGH	= 0x00000001UL,
+	BBC1770_CFG_HAS_RESET	= 0x00000002UL,
+};
 
 /**
  * BBC 1770 floppy disc controller
@@ -50,6 +98,11 @@ typedef struct {
 
 	/** Control register */
 	uint8_t control;
+	/** Control register bit definitions */
+	uint32_t controls;
+	/** Configuration */
+	uint32_t config;
 } BBC1770FDC;
 
 #endif
+

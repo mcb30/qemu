@@ -45,6 +45,19 @@ static inline const char * bbc1770_name ( BBC1770FDC *fdc ) {
 }
 
 /**
+ * Get control register bit value
+ *
+ * @v fdc		1770 FDC
+ * @v name		Control register bit name
+ * @ret value		Current control register bit value
+ */
+static inline bool bbc1770_control ( BBC1770FDC *fdc, unsigned int name ) {
+
+	return ( ( ( fdc->control >> BBC1770_CTRL_BIT ( fdc->controls, name ) )
+		   ^ BBC1770_CTRL_INVERTED ( fdc->controls, name ) ) & 1 );
+}
+
+/**
  * Guess disk geometry
  *
  * @v opaque		1770 FDC
@@ -89,7 +102,7 @@ static int bbc1770_fdc_guess_geometry ( void *opaque, WD1770FDD *fdd ) {
 	 */
 	if ( suffix && ( ( strcasecmp ( suffix, "ssd" ) == 0 ) ||
 			 ( strcasecmp ( suffix, "dsd" ) == 0 ) ) ) {
-		fdd->single_density = true;
+		fdd->double_density = false;
 		fdd->sides = ( ( tolower ( suffix[0] ) == 's' ) ? 1 : 2 );
 		fdd->sectors = BBC_DFS_SECTORS;
 		fdd->sector_size = BBC_DFS_SECTOR_SIZE;
@@ -108,8 +121,8 @@ static int bbc1770_fdc_guess_geometry ( void *opaque, WD1770FDD *fdd ) {
 			fdd->sides = try_sides[j];
 			for ( k = 0 ; k < ARRAY_SIZE ( try_sectors ) ; k++ ) {
 				fdd->sectors = try_sectors[k];
-				fdd->single_density =
-					( fdd->sectors == BBC_DFS_SECTORS );
+				fdd->double_density =
+					( fdd->sectors > BBC_DFS_SECTORS );
 				if ( ( fdd->sides * fdd->tracks *
 				       fdd->sectors * fdd->sector_size )
 				     == length ) {
@@ -154,52 +167,56 @@ static void bbc1770_fdc_write ( void *opaque, hwaddr addr, uint64_t data64,
 				unsigned int size ) {
 	BBC1770FDC *fdc = opaque;
 	uint8_t data = data64;
+	bool drive0;
+	bool drive1;
+	bool side1;
+	bool double_density;
+	bool reset;
 	int drive;
-	unsigned int side;
-	bool single_density;
-	bool master_reset;
 
 	/* Write to control register */
 	fdc->control = data;
-	LOG_BBC ( "%s: control register (&%02lX) set to &%02X\n",
-		  bbc1770_name ( fdc ), addr, data );
 
-	/* Select drive number */
-	switch ( data & BBC1770_DRIVE_MASK ) {
-	case 0:
-		/* No drive selected */
-		drive = WD1770_NO_DRIVE;
-		break;
-	case BBC1770_DRIVE_0:
-		drive = 0;
-		break;
-	case BBC1770_DRIVE_1:
-		drive = 1;
-		break;
-	default:
+	/* Decode control register bits */
+	drive0 = bbc1770_control ( fdc, BBC1770_CTRL_DRIVE0 );
+	drive1 = bbc1770_control ( fdc, BBC1770_CTRL_DRIVE1 );
+	side1 = bbc1770_control ( fdc, BBC1770_CTRL_SIDE1 );
+	double_density = bbc1770_control ( fdc, BBC1770_CTRL_DOUBLE );
+	reset = ( ( fdc->config & BBC1770_CFG_HAS_RESET ) &&
+		  bbc1770_control ( fdc, BBC1770_CTRL_RESET ) );
+	LOG_BBC ( "%s: control register (&%02lX) set to &%02X%s%s side%d "
+		  "%s-density%s\n", bbc1770_name ( fdc ), addr, data,
+		  ( drive0 ? " drive0" : "" ), ( drive1 ? " drive1" : "" ),
+		  ( side1 ? 1 : 0 ), ( double_density ? "double" : "single" ),
+		  ( reset ? " reset" : "" ) );
+
+	/* Determine drive number */
+	if ( drive0 && drive1 ) {
 		/* Invalid combination */
 		qemu_log_mask ( LOG_UNIMP, "%s: unimplemented simultaneous "
 				"operation of both drives\n",
 				bbc1770_name ( fdc ) );
 		drive = WD1770_NO_DRIVE;
-		break;
+	} else if ( drive0 ) {
+		drive = 0;
+	} else if ( drive1 ) {
+		drive = 1;
+	} else {
+		drive = WD1770_NO_DRIVE;
 	}
 	wd1770_set_drive ( fdc->fdc, drive );
 
-	/* Decode side number */
-	side = ( ( data & BBC1770_SIDE_1 ) ? 1 : 0 );
-	wd1770_set_side ( fdc->fdc, side );
+	/* Set side number */
+	wd1770_set_side ( fdc->fdc, ( side1 ? 1 : 0 ) );
 
-	/* Decode density */
-	single_density = ( !! ( data & BBC1770_SINGLE_DENSITY ) );
-	wd1770_set_single_density ( fdc->fdc, single_density );
+	/* Set density */
+	wd1770_set_double_density ( fdc->fdc, double_density );
 
-	/* Decode master reset.  This line is supposed to be
-	 * level-sensitive; the real hardware would be held in reset
-	 * while the line remained active.
+	/* Reset chip, if applicable.  The reset line is supposed to
+	 * be level-sensitive; the real hardware would be held in
+	 * reset while the line remained active.
 	 */
-	master_reset = ( ! ( data & BBC1770_NOT_MASTER_RESET ) );
-	if ( master_reset )
+	if ( reset )
 		wd1770_reset ( fdc->fdc );
 }
 
@@ -223,6 +240,8 @@ static int bbc1770_init ( BBCFDCDevice *bbcfdc, MemoryRegion *mr, qemu_irq drq,
 	BBC1770FDC *fdc = DO_UPCAST ( BBC1770FDC, bbcfdc, bbcfdc );
 	const char *control_name;
 	const char *wd1770_name;
+	unsigned int control_offset;
+	unsigned int wd1770_offset;
 
 	/* The memory map for this peripheral is a little strange.
 	 * The BBC was originally designed to take an Intel 8271 FDC,
@@ -234,14 +253,18 @@ static int bbc1770_init ( BBCFDCDevice *bbcfdc, MemoryRegion *mr, qemu_irq drq,
 
 	/* Initialise control register */
 	control_name = g_strdup_printf ( "%s.control", bbc1770_name ( fdc ) );
+	control_offset = ( ( fdc->config & BBC1770_CFG_CTRL_HIGH ) ?
+			   BBC1770_OFFSET_HIGH : BBC1770_OFFSET_LOW );
 	memory_region_init_io ( &fdc->mr, &bbc1770_fdc_ops, fdc, control_name,
 				BBC1770_CONTROL_SIZE );
-	memory_region_add_subregion ( mr, BBC1770_CONTROL_OFFSET, &fdc->mr );
+	memory_region_add_subregion ( mr, control_offset, &fdc->mr );
 
 	/* Initialise 1770 FDC */
 	wd1770_name = g_strdup_printf ( "%s.wd1770", bbc1770_name ( fdc ) );
-	fdc->fdc = wd1770_create ( mr, BBC1770_WD1770_OFFSET, wd1770_name,
-				   drq, intrq, block );
+	wd1770_offset = ( ( fdc->config & BBC1770_CFG_CTRL_HIGH ) ?
+			  BBC1770_OFFSET_LOW : BBC1770_OFFSET_HIGH );
+	fdc->fdc = wd1770_create ( mr, wd1770_offset, wd1770_name, drq,
+				   intrq, block );
 	wd1770_set_ops ( fdc->fdc, &bbc1770_fdc_1770_ops, fdc );
 
 	return 0;
@@ -254,36 +277,78 @@ static const VMStateDescription vmstate_bbc1770 = {
 	.minimum_version_id = 1,
 	.fields = ( VMStateField[] ) {
 		VMSTATE_UINT8 ( control, BBC1770FDC ),
+		VMSTATE_UINT32 ( controls, BBC1770FDC ),
+		VMSTATE_UINT32 ( config, BBC1770FDC ),
 		VMSTATE_END_OF_LIST()
 	},
 };
 
-/** 1770 FDC properties */
-static Property bbc1770_properties[] = {
+/** Acorn 1770 FDC properties */
+static Property acorn1770_properties[] = {
+	DEFINE_PROP_HEX32 ( "controls", BBC1770FDC, controls,
+			    ( BBC1770_CTRL ( BBC1770_CTRL_DRIVE0, 0, 0 ) |
+			      BBC1770_CTRL ( BBC1770_CTRL_DRIVE1, 1, 0 ) |
+			      BBC1770_CTRL ( BBC1770_CTRL_SIDE1, 2, 0 ) |
+			      BBC1770_CTRL ( BBC1770_CTRL_DOUBLE, 3, 1 ) |
+			      BBC1770_CTRL ( BBC1770_CTRL_RESET, 6, 0 ) ) ),
+	DEFINE_PROP_HEX32 ( "config", BBC1770FDC, config,
+			    BBC1770_CFG_HAS_RESET ),
+	DEFINE_PROP_END_OF_LIST(),
+};
+
+/** Opus 1770 FDC properties */
+static Property opus1770_properties[] = {
+	DEFINE_PROP_HEX32 ( "controls", BBC1770FDC, controls,
+			    ( BBC1770_CTRL ( BBC1770_CTRL_DRIVE0, 0, 1 ) |
+			      BBC1770_CTRL ( BBC1770_CTRL_DRIVE1, 0, 0 ) |
+			      BBC1770_CTRL ( BBC1770_CTRL_SIDE1, 1, 0 ) |
+			      BBC1770_CTRL ( BBC1770_CTRL_DOUBLE, 6, 0 ) ) ),
+	DEFINE_PROP_HEX32 ( "config", BBC1770FDC, config,
+			    BBC1770_CFG_CTRL_HIGH ),
 	DEFINE_PROP_END_OF_LIST(),
 };
 
 /** 1770 FDC class initialiser */
-static void bbc1770_class_init ( ObjectClass *class, void *data ) {
+static void bbc1770_class_init ( ObjectClass *class, void *data,
+				 Property *props ) {
 	DeviceClass *dc = DEVICE_CLASS ( class );
 	BBCFDCDeviceClass *fdc_class = BBC_FDC_DEVICE_CLASS ( class );
 
 	fdc_class->init = bbc1770_init;
 	dc->vmsd = &vmstate_bbc1770;
-	dc->props = bbc1770_properties;
+	dc->props = props;
 }
 
-/** 1770 FDC information */
-static TypeInfo bbc1770_info = {
-	.name = "bbc1770",
+/** Acorn 1770 FDC class initialiser */
+static void acorn1770_class_init ( ObjectClass *class, void *data ) {
+	bbc1770_class_init ( class, data, acorn1770_properties );
+}
+
+/** Opus 1770 FDC class initialiser */
+static void opus1770_class_init ( ObjectClass *class, void *data ) {
+	bbc1770_class_init ( class, data, opus1770_properties );
+}
+
+/** Acorn 1770 FDC information */
+static TypeInfo acorn1770_info = {
+	.name = "acorn1770",
 	.parent = TYPE_BBC_FDC_DEVICE,
 	.instance_size = sizeof ( BBC1770FDC ),
-	.class_init = bbc1770_class_init,
+	.class_init = acorn1770_class_init,
+};
+
+/** Opus 1770 FDC information */
+static TypeInfo opus1770_info = {
+	.name = "opus1770",
+	.parent = TYPE_BBC_FDC_DEVICE,
+	.instance_size = sizeof ( BBC1770FDC ),
+	.class_init = opus1770_class_init,
 };
 
 /** Type registrar */
 static void bbc1770_register_types ( void ) {
-	type_register_static ( &bbc1770_info );
+	type_register_static ( &acorn1770_info );
+	type_register_static ( &opus1770_info );
 }
 
 /** Type initialiser */

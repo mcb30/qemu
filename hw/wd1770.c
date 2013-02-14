@@ -297,7 +297,7 @@ static WD1770FDD * wd1770_fdd ( WD1770FDC *fdc ) {
 		LOG_WD1770 ( "%s: %s guessed as %s-density, %d side(s), %d "
 			     "tracks, %d sectors of %d bytes\n",
 			     fdc->name, bdrv_get_device_name ( fdd->block ),
-			     ( fdd->single_density ? "single" : "double" ),
+			     ( fdd->double_density ? "double" : "single" ),
 			     fdd->sides, fdd->tracks, fdd->sectors,
 			     fdd->sector_size );
 	}
@@ -388,7 +388,7 @@ static int64_t wd1770_offset ( WD1770FDC *fdc, uint8_t sector ) {
 	 * is incorrect, then the wrong decoding will be applied and
 	 * the (track,sector) tuple will not be detected.
 	 */
-	if ( fdd->single_density != fdc->single_density ) {
+	if ( fdd->double_density != fdc->double_density ) {
 		LOG_WD1770 ( "%s: track %d.%d sector %d not found: wrong "
 			     "density\n", fdc->name, fdc->track, fdc->side,
 			     sector );
@@ -481,18 +481,18 @@ void wd1770_set_side ( WD1770FDC *fdc, unsigned int side ) {
  * Set single/double density
  *
  * @v fdc		1770 FDC
- * @v single_density	Use single density
+ * @v double_density	Use double density
  *
  * The WD1770 chip does not provide a register to select disk density;
  * this information must be provided externally.
  */
-void wd1770_set_single_density ( WD1770FDC *fdc, bool single_density ) {
+void wd1770_set_double_density ( WD1770FDC *fdc, bool double_density ) {
 
 	LOG_WD1770 ( "%s: density=%s\n", fdc->name,
-		     ( single_density ? "single" : "double" ) );
+		     ( double_density ? "double" : "single" ) );
 
 	/* Record side */
-	fdc->single_density = single_density;
+	fdc->double_density = double_density;
 }
 
 /**
@@ -777,8 +777,8 @@ static void wd1770_write_track ( WD1770FDC *fdc ) {
 
 	/* Start ongoing command */
 	fdc->offset = 0;
-	fdc->remaining = ( fdc->single_density ? WD1770_TRACK_SIZE_SINGLE :
-			   WD1770_TRACK_SIZE_DOUBLE );
+	fdc->remaining = ( fdc->double_density ? WD1770_TRACK_SIZE_DOUBLE :
+			   WD1770_TRACK_SIZE_SINGLE );
 
 	/* Start data request timer for first byte of raw track data */
 	wd1770_drq_delayed ( fdc );
@@ -954,7 +954,7 @@ static void wd1770_write_track_next ( WD1770FDC *fdc ) {
 	}
 
 	/* Decode raw track data to determine new disk geometry */
-	fdd->single_density = fdc->single_density;
+	fdd->double_density = fdc->double_density;
 	if ( fdc->side >= fdd->sides )
 		fdd->sides = ( fdc->side + 1 );
 	if ( fdd->track >= fdd->tracks )
@@ -1503,7 +1503,7 @@ static const VMStateDescription vmstate_wd1770 = {
 		VMSTATE_TIMER ( motor_off_timer, WD1770FDC ),
 		VMSTATE_INT8 ( drive, WD1770FDC ),
 		VMSTATE_UINT8 ( side, WD1770FDC ),
-		VMSTATE_BOOL ( single_density, WD1770FDC ),
+		VMSTATE_BOOL ( double_density, WD1770FDC ),
 		VMSTATE_UINT8 ( command, WD1770FDC ),
 		VMSTATE_UINT8 ( status, WD1770FDC ),
 		VMSTATE_UINT8 ( track, WD1770FDC ),

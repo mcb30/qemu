@@ -119,7 +119,7 @@ typedef struct {
 	/** Block device */
 	BlockDriverState *block;
 	/** Density of media */
-	bool single_density;
+	bool double_density;
 	/** Number of sides on media */
 	uint8_t sides;
 	/** Number of tracks on media */
@@ -169,7 +169,7 @@ struct WD1770FDC {
 	/** Selected side */
 	uint8_t side;
 	/** Selected density */
-	bool single_density;
+	bool double_density;
 
 	/** Command register */
 	uint8_t command;
@@ -235,7 +235,7 @@ typedef struct {
 extern void wd1770_reset ( WD1770FDC *fdc );
 extern void wd1770_set_drive ( WD1770FDC *fdc, int drive );
 extern void wd1770_set_side ( WD1770FDC *fdc, unsigned int side );
-extern void wd1770_set_single_density ( WD1770FDC *fdc, bool single_density );
+extern void wd1770_set_double_density ( WD1770FDC *fdc, bool double_density );
 extern void wd1770_set_ops ( WD1770FDC *fdc, WD1770Ops *ops, void *opaque );
 extern WD1770FDC * wd1770_create ( MemoryRegion *mr, hwaddr offset,
 				   const char *name, qemu_irq drq,
