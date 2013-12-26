@@ -109,4 +109,3 @@ typedef struct {
 #define TYPE_BBC1770_OPUS "opus1770"
 
 #endif
-

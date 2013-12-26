@@ -1,4 +1,4 @@
 obj-y += bbc.o bbc_crt.o vga.o m6522.o mc6850.o mc6845.o
-obj-y += bbc_1770.o wd1770.o
+obj-y += bbc_1770.o wd1770.o bbc_8272.o i8272.o
 
 obj-y := $(addprefix ../,$(obj-y))

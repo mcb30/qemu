@@ -26,6 +26,7 @@
 #include "loader.h"
 #include "bbc.h"
 #include "bbc_1770.h"
+#include "bbc_8272.h"
 
 #define DEBUG_BBC 1
 
@@ -1762,6 +1763,11 @@ static const char * bbc_fdc_dfs_type ( BBCPagedROM *paged ) {
 		if ( strstr ( copyright, "Slogger" ) &&
 		     strstr ( title, "DDOS" ) ) {
 			return TYPE_BBC1770_OPUS;
+		}
+
+		/* Check for UDM DDFS */
+		if ( strstr ( title, "UDM DDFS" ) ) {
+			return TYPE_BBC8272_UDM;
 		}
 	}
 
