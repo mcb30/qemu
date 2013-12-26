@@ -23,8 +23,8 @@
  * THE SOFTWARE.
  */
 #include <hw/hw.h>
-#include <hw/pc.h>
-#include <hw/isa.h>
+#include <hw/i386/pc.h>
+#include <hw/isa/isa.h>
 #include "block/block.h"
 #include "sysemu/dma.h"
 
@@ -111,7 +111,7 @@ static void isa_ide_class_initfn(ObjectClass *klass, void *data)
     dc->props = isa_ide_properties;
 }
 
-static TypeInfo isa_ide_info = {
+static const TypeInfo isa_ide_info = {
     .name          = "isa-ide",
     .parent        = TYPE_ISA_DEVICE,
     .instance_size = sizeof(ISAIDEState),

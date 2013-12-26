@@ -21,16 +21,16 @@
 
 #include "cpu.h"
 #include "qemu-common.h"
-#include "qapi/error.h"
 
 
-static void alpha_cpu_realize(Object *obj, Error **errp)
+static void alpha_cpu_realizefn(DeviceState *dev, Error **errp)
 {
-#ifndef CONFIG_USER_ONLY
-    AlphaCPU *cpu = ALPHA_CPU(obj);
+    AlphaCPU *cpu = ALPHA_CPU(dev);
+    AlphaCPUClass *acc = ALPHA_CPU_GET_CLASS(dev);
 
     qemu_init_vcpu(&cpu->env);
-#endif
+
+    acc->parent_realize(dev, errp);
 }
 
 /* Sort alphabetically by type name. */
@@ -98,14 +98,15 @@ static ObjectClass *alpha_cpu_class_by_name(const char *cpu_model)
     }
 
     oc = object_class_by_name(cpu_model);
-    if (oc != NULL) {
+    if (oc != NULL && object_class_dynamic_cast(oc, TYPE_ALPHA_CPU) != NULL &&
+        !object_class_is_abstract(oc)) {
         return oc;
     }
 
     for (i = 0; i < ARRAY_SIZE(alpha_cpu_aliases); i++) {
         if (strcmp(cpu_model, alpha_cpu_aliases[i].alias) == 0) {
             oc = object_class_by_name(alpha_cpu_aliases[i].typename);
-            assert(oc != NULL);
+            assert(oc != NULL && !object_class_is_abstract(oc));
             return oc;
         }
     }
@@ -113,6 +114,9 @@ static ObjectClass *alpha_cpu_class_by_name(const char *cpu_model)
     typename = g_strdup_printf("%s-" TYPE_ALPHA_CPU, cpu_model);
     oc = object_class_by_name(typename);
     g_free(typename);
+    if (oc != NULL && object_class_is_abstract(oc)) {
+        oc = NULL;
+    }
     return oc;
 }
 
@@ -132,7 +136,8 @@ AlphaCPU *cpu_alpha_init(const char *cpu_model)
 
     env->cpu_model_str = cpu_model;
 
-    alpha_cpu_realize(OBJECT(cpu), NULL);
+    object_property_set_bool(OBJECT(cpu), true, "realized", NULL);
+
     return cpu;
 }
 
@@ -228,9 +233,11 @@ static const TypeInfo ev68_cpu_type_info = {
 
 static void alpha_cpu_initfn(Object *obj)
 {
+    CPUState *cs = CPU(obj);
     AlphaCPU *cpu = ALPHA_CPU(obj);
     CPUAlphaState *env = &cpu->env;
 
+    cs->env_ptr = env;
     cpu_exec_init(env);
     tlb_flush(env, 1);
 
@@ -246,6 +253,19 @@ static void alpha_cpu_initfn(Object *obj)
     env->fen = 1;
 }
 
+static void alpha_cpu_class_init(ObjectClass *oc, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(oc);
+    CPUClass *cc = CPU_CLASS(oc);
+    AlphaCPUClass *acc = ALPHA_CPU_CLASS(oc);
+
+    acc->parent_realize = dc->realize;
+    dc->realize = alpha_cpu_realizefn;
+
+    cc->class_by_name = alpha_cpu_class_by_name;
+    cc->do_interrupt = alpha_cpu_do_interrupt;
+}
+
 static const TypeInfo alpha_cpu_type_info = {
     .name = TYPE_ALPHA_CPU,
     .parent = TYPE_CPU,
@@ -253,6 +273,7 @@ static const TypeInfo alpha_cpu_type_info = {
     .instance_init = alpha_cpu_initfn,
     .abstract = true,
     .class_size = sizeof(AlphaCPUClass),
+    .class_init = alpha_cpu_class_init,
 };
 
 static void alpha_cpu_register_types(void)

@@ -23,9 +23,9 @@
  * THE SOFTWARE.
  */
 #include <hw/hw.h>
-#include <hw/pc.h>
+#include <hw/i386/pc.h>
 #include <hw/pci/pci.h>
-#include <hw/isa.h>
+#include <hw/isa/isa.h>
 #include "block/block.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/dma.h"
@@ -342,7 +342,7 @@ static void cmd646_ide_class_init(ObjectClass *klass, void *data)
     dc->props = cmd646_ide_properties;
 }
 
-static TypeInfo cmd646_ide_info = {
+static const TypeInfo cmd646_ide_info = {
     .name          = "cmd646-ide",
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCIIDEState),

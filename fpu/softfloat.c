@@ -2234,7 +2234,7 @@ float32 float32_muladd(float32 a, float32 b, float32 c, int flags STATUS_PARAM)
             }
         }
         /* Zero plus something non-zero : just return the something */
-        return make_float32(float32_val(c) ^ (signflip << 31));
+        return packFloat32(cSign ^ signflip, cExp, cSig);
     }
 
     if (aExp == 0) {
@@ -3787,7 +3787,7 @@ float64 float64_muladd(float64 a, float64 b, float64 c, int flags STATUS_PARAM)
             }
         }
         /* Zero plus something non-zero : just return the something */
-        return make_float64(float64_val(c) ^ ((uint64_t)signflip << 63));
+        return packFloat64(cSign ^ signflip, cExp, cSig);
     }
 
     if (aExp == 0) {
@@ -3898,9 +3898,15 @@ float64 float64_muladd(float64 a, float64 b, float64 c, int flags STATUS_PARAM)
             }
             zExp -= shiftcount;
         } else {
-            shiftcount = countLeadingZeros64(zSig1) - 1;
-            zSig0 = zSig1 << shiftcount;
-            zExp -= (shiftcount + 64);
+            shiftcount = countLeadingZeros64(zSig1);
+            if (shiftcount == 0) {
+                zSig0 = (zSig1 >> 1) | (zSig1 & 1);
+                zExp -= 63;
+            } else {
+                shiftcount--;
+                zSig0 = zSig1 << shiftcount;
+                zExp -= (shiftcount + 64);
+            }
         }
         return roundAndPackFloat64(zSign, zExp, zSig0 STATUS_VAR);
     }

@@ -40,7 +40,7 @@
 #include <sys/time.h>
 #include <assert.h>
 #include <signal.h>
-#include <glib.h>
+#include "glib-compat.h"
 
 #ifdef _WIN32
 #include "sysemu/os-win32.h"
@@ -67,6 +67,9 @@
 #endif
 #if !defined(ECANCELED)
 #define ECANCELED 4097
+#endif
+#if !defined(EMEDIUMTYPE)
+#define EMEDIUMTYPE 4098
 #endif
 #ifndef TIME_MAX
 #define TIME_MAX LONG_MAX
@@ -139,6 +142,18 @@ int qemu_main(int argc, char **argv, char **envp);
 void qemu_get_timedate(struct tm *tm, int offset);
 int qemu_timedate_diff(struct tm *tm);
 
+#if !GLIB_CHECK_VERSION(2, 20, 0)
+/*
+ * Glib before 2.20.0 doesn't implement g_poll, so wrap it to compile properly
+ * on older systems.
+ */
+static inline gint g_poll(GPollFD *fds, guint nfds, gint timeout)
+{
+    GMainContext *ctx = g_main_context_default();
+    return g_main_context_get_poll_func(ctx)(fds, nfds, timeout);
+}
+#endif
+
 /**
  * is_help_option:
  * @s: string to test
@@ -169,6 +184,10 @@ int qemu_fls(int i);
 int qemu_fdatasync(int fd);
 int fcntl_setfl(int fd, int flag);
 int qemu_parse_fd(const char *param);
+
+int parse_uint(const char *s, unsigned long long *value, char **endptr,
+               int base);
+int parse_uint_full(const char *s, unsigned long long *value, int base);
 
 /*
  * strtosz() suffixes used to specify the default treatment of an
@@ -288,7 +307,9 @@ struct qemu_work_item {
 };
 
 #ifdef CONFIG_USER_ONLY
-#define qemu_init_vcpu(env) do { } while (0)
+static inline void qemu_init_vcpu(void *env)
+{
+}
 #else
 void qemu_init_vcpu(void *env);
 #endif
@@ -420,5 +441,45 @@ int64_t pow2floor(int64_t value);
 
 int uleb128_encode_small(uint8_t *out, uint32_t n);
 int uleb128_decode_small(const uint8_t *in, uint32_t *n);
+
+/* unicode.c */
+int mod_utf8_codepoint(const char *s, size_t n, char **end);
+
+/*
+ * Hexdump a buffer to a file. An optional string prefix is added to every line
+ */
+
+void hexdump(const char *buf, FILE *fp, const char *prefix, size_t size);
+
+/* vector definitions */
+#ifdef __ALTIVEC__
+#include <altivec.h>
+#define VECTYPE        vector unsigned char
+#define SPLAT(p)       vec_splat(vec_ld(0, p), 0)
+#define ALL_EQ(v1, v2) vec_all_eq(v1, v2)
+/* altivec.h may redefine the bool macro as vector type.
+ * Reset it to POSIX semantics. */
+#undef bool
+#define bool _Bool
+#elif defined __SSE2__
+#include <emmintrin.h>
+#define VECTYPE        __m128i
+#define SPLAT(p)       _mm_set1_epi8(*(p))
+#define ALL_EQ(v1, v2) (_mm_movemask_epi8(_mm_cmpeq_epi8(v1, v2)) == 0xFFFF)
+#else
+#define VECTYPE        unsigned long
+#define SPLAT(p)       (*(p) * (~0UL / 255))
+#define ALL_EQ(v1, v2) ((v1) == (v2))
+#endif
+
+#define BUFFER_FIND_NONZERO_OFFSET_UNROLL_FACTOR 8
+static inline bool
+can_use_buffer_find_nonzero_offset(const void *buf, size_t len)
+{
+    return (len % (BUFFER_FIND_NONZERO_OFFSET_UNROLL_FACTOR
+                   * sizeof(VECTYPE)) == 0
+            && ((uintptr_t) buf) % sizeof(VECTYPE) == 0);
+}
+size_t buffer_find_nonzero_offset(const void *buf, size_t len);
 
 #endif

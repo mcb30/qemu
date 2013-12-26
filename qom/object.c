@@ -245,6 +245,7 @@ static void type_initialize(TypeImpl *ti)
 
         g_assert(parent->class_size <= ti->class_size);
         memcpy(ti->class, parent->class, parent->class_size);
+        ti->class->interfaces = NULL;
 
         for (e = parent->class->interfaces; e; e = e->next) {
             ObjectClass *iface = e->data;
@@ -361,12 +362,18 @@ static void object_property_del_child(Object *obj, Object *child, Error **errp)
 
 void object_unparent(Object *obj)
 {
-    if (obj->parent) {
-        object_property_del_child(obj->parent, obj, NULL);
+    if (!obj->parent) {
+        return;
     }
+
+    object_ref(obj);
     if (obj->class->unparent) {
         (obj->class->unparent)(obj);
     }
+    if (obj->parent) {
+        object_property_del_child(obj->parent, obj, NULL);
+    }
+    object_unref(obj);
 }
 
 static void object_deinit(Object *obj, TypeImpl *type)
@@ -415,13 +422,6 @@ Object *object_new(const char *typename)
     return object_new_with_type(ti);
 }
 
-void object_delete(Object *obj)
-{
-    object_unparent(obj);
-    g_assert(obj->ref == 1);
-    object_unref(obj);
-}
-
 Object *object_dynamic_cast(Object *obj, const char *typename)
 {
     if (obj && object_class_dynamic_cast(object_get_class(obj), typename)) {
@@ -453,7 +453,8 @@ ObjectClass *object_class_dynamic_cast(ObjectClass *class,
     TypeImpl *type = class->type;
     ObjectClass *ret = NULL;
 
-    if (type->num_interfaces && type_is_ancestor(target_type, type_interface)) {
+    if (type->class->interfaces &&
+            type_is_ancestor(target_type, type_interface)) {
         int found = 0;
         GSList *i;
 
@@ -499,6 +500,11 @@ const char *object_get_typename(Object *obj)
 ObjectClass *object_get_class(Object *obj)
 {
     return obj->class;
+}
+
+bool object_class_is_abstract(ObjectClass *klass)
+{
+    return klass->type->abstract;
 }
 
 const char *object_class_get_name(ObjectClass *klass)
@@ -627,7 +633,18 @@ void object_property_add(Object *obj, const char *name, const char *type,
                          ObjectPropertyRelease *release,
                          void *opaque, Error **errp)
 {
-    ObjectProperty *prop = g_malloc0(sizeof(*prop));
+    ObjectProperty *prop;
+
+    QTAILQ_FOREACH(prop, &obj->properties, node) {
+        if (strcmp(prop->name, name) == 0) {
+            error_setg(errp, "attempt to add duplicate property '%s'"
+                       " to object (type '%s')", name,
+                       object_get_typename(obj));
+            return;
+        }
+    }
+
+    prop = g_malloc0(sizeof(*prop));
 
     prop->name = g_strdup(name);
     prop->type = g_strdup(type);
@@ -1017,7 +1034,7 @@ gchar *object_get_canonical_path(Object *obj)
     return newpath;
 }
 
-Object *object_resolve_path_component(Object *parent, gchar *part)
+Object *object_resolve_path_component(Object *parent, const gchar *part)
 {
     ObjectProperty *prop = object_property_find(parent, part, NULL);
     if (prop == NULL) {

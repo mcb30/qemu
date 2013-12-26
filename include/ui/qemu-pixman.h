@@ -6,9 +6,17 @@
 #ifndef QEMU_PIXMAN_H
 #define QEMU_PIXMAN_H
 
+/* pixman-0.16.0 headers have a redundant declaration */
+#ifdef CONFIG_PRAGMA_DIAGNOSTIC_AVAILABLE
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wredundant-decls"
+#endif
 #include <pixman.h>
+#ifdef CONFIG_PRAGMA_DIAGNOSTIC_AVAILABLE
+#pragma GCC diagnostic pop
+#endif
 
-#include "console.h"
+#include "qemu/typedefs.h"
 
 /*
  * pixman image formats are defined to be native endian,
@@ -35,5 +43,14 @@ void qemu_pixman_linebuf_fill(pixman_image_t *linebuf, pixman_image_t *fb,
 pixman_image_t *qemu_pixman_mirror_create(pixman_format_code_t format,
                                           pixman_image_t *image);
 void qemu_pixman_image_unref(pixman_image_t *image);
+
+pixman_color_t qemu_pixman_color(PixelFormat *pf, uint32_t color);
+pixman_image_t *qemu_pixman_glyph_from_vgafont(int height, const uint8_t *font,
+                                               unsigned int ch);
+void qemu_pixman_glyph_render(pixman_image_t *glyph,
+                              pixman_image_t *surface,
+                              pixman_color_t *fgcol,
+                              pixman_color_t *bgcol,
+                              int x, int y, int cw, int ch);
 
 #endif /* QEMU_PIXMAN_H */

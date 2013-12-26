@@ -17,13 +17,29 @@
 #include <errno.h>
 #include "config-host.h"
 #include "qemu/queue.h"
+#include "qom/cpu.h"
 
 #ifdef CONFIG_KVM
 #include <linux/kvm.h>
 #include <linux/kvm_para.h>
+#else
+/* These constants must never be used at runtime if kvm_enabled() is false.
+ * They exist so we don't need #ifdefs around KVM-specific code that already
+ * checks kvm_enabled() properly.
+ */
+#define KVM_CPUID_SIGNATURE      0
+#define KVM_CPUID_FEATURES       0
+#define KVM_FEATURE_CLOCKSOURCE  0
+#define KVM_FEATURE_NOP_IO_DELAY 0
+#define KVM_FEATURE_MMU_OP       0
+#define KVM_FEATURE_CLOCKSOURCE2 0
+#define KVM_FEATURE_ASYNC_PF     0
+#define KVM_FEATURE_STEAL_TIME   0
+#define KVM_FEATURE_PV_EOI       0
+#define KVM_FEATURE_CLOCKSOURCE_STABLE_BIT 0
 #endif
 
-extern int kvm_allowed;
+extern bool kvm_allowed;
 extern bool kvm_kernel_irqchip;
 extern bool kvm_async_interrupts_allowed;
 extern bool kvm_irqfds_allowed;
@@ -120,9 +136,9 @@ int kvm_has_many_ioeventfds(void);
 int kvm_has_gsi_routing(void);
 int kvm_has_intx_set_mask(void);
 
-#ifdef NEED_CPU_H
-int kvm_init_vcpu(CPUArchState *env);
+int kvm_init_vcpu(CPUState *cpu);
 
+#ifdef NEED_CPU_H
 int kvm_cpu_exec(CPUArchState *env);
 
 #if !defined(CONFIG_USER_ONLY)
@@ -143,7 +159,7 @@ int kvm_update_guest_debug(CPUArchState *env, unsigned long reinject_trap);
 int kvm_set_signal_mask(CPUArchState *env, const sigset_t *sigset);
 #endif
 
-int kvm_on_sigbus_vcpu(CPUArchState *env, int code, void *addr);
+int kvm_on_sigbus_vcpu(CPUState *cpu, int code, void *addr);
 int kvm_on_sigbus(int code, void *addr);
 
 /* internal API */
@@ -179,6 +195,9 @@ int kvm_arch_put_registers(CPUState *cpu, int level);
 int kvm_arch_init(KVMState *s);
 
 int kvm_arch_init_vcpu(CPUState *cpu);
+
+/* Returns VCPU ID to be used on KVM_CREATE_VCPU ioctl() */
+unsigned long kvm_arch_vcpu_id(CPUState *cpu);
 
 void kvm_arch_reset_vcpu(CPUState *cpu);
 
@@ -231,8 +250,8 @@ int kvm_check_extension(KVMState *s, unsigned int extension);
 uint32_t kvm_arch_get_supported_cpuid(KVMState *env, uint32_t function,
                                       uint32_t index, int reg);
 void kvm_cpu_synchronize_state(CPUArchState *env);
-void kvm_cpu_synchronize_post_reset(CPUArchState *env);
-void kvm_cpu_synchronize_post_init(CPUArchState *env);
+void kvm_cpu_synchronize_post_reset(CPUState *cpu);
+void kvm_cpu_synchronize_post_init(CPUState *cpu);
 
 /* generic hooks - to be moved/refactored once there are more users */
 
@@ -243,17 +262,17 @@ static inline void cpu_synchronize_state(CPUArchState *env)
     }
 }
 
-static inline void cpu_synchronize_post_reset(CPUArchState *env)
+static inline void cpu_synchronize_post_reset(CPUState *cpu)
 {
     if (kvm_enabled()) {
-        kvm_cpu_synchronize_post_reset(env);
+        kvm_cpu_synchronize_post_reset(cpu);
     }
 }
 
-static inline void cpu_synchronize_post_init(CPUArchState *env)
+static inline void cpu_synchronize_post_init(CPUState *cpu)
 {
     if (kvm_enabled()) {
-        kvm_cpu_synchronize_post_init(env);
+        kvm_cpu_synchronize_post_init(cpu);
     }
 }
 
@@ -264,10 +283,6 @@ int kvm_physical_memory_addr_from_host(KVMState *s, void *ram_addr,
 #endif
 
 #endif
-int kvm_set_ioeventfd_mmio(int fd, uint32_t adr, uint32_t val, bool assign,
-                           uint32_t size);
-
-int kvm_set_ioeventfd_pio_word(int fd, uint16_t adr, uint16_t val, bool assign);
 
 int kvm_irqchip_add_msi_route(KVMState *s, MSIMessage msg);
 int kvm_irqchip_update_msi_route(KVMState *s, int virq, MSIMessage msg);

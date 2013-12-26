@@ -234,13 +234,11 @@ static void free_keycodes(void)
 
 static void release_keys(void *opaque)
 {
-    int i;
-
-    for (i = 0; i < keycodes_size; i++) {
-        if (keycodes[i] & 0x80) {
+    while (keycodes_size > 0) {
+        if (keycodes[--keycodes_size] & 0x80) {
             kbd_put_keycode(0xe0);
         }
-        kbd_put_keycode(keycodes[i]| 0x80);
+        kbd_put_keycode(keycodes[keycodes_size] | 0x80);
     }
 
     free_keycodes();
@@ -269,7 +267,7 @@ void qmp_send_key(KeyValueList *keys, bool has_hold_time, int64_t hold_time,
         /* key down events */
         keycode = keycode_from_keyvalue(p->value);
         if (keycode < 0x01 || keycode > 0xff) {
-            error_setg(errp, "invalid hex keycode 0x%x\n", keycode);
+            error_setg(errp, "invalid hex keycode 0x%x", keycode);
             free_keycodes();
             return;
         }

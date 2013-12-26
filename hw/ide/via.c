@@ -24,9 +24,9 @@
  * THE SOFTWARE.
  */
 #include <hw/hw.h>
-#include <hw/pc.h>
+#include <hw/i386/pc.h>
 #include <hw/pci/pci.h>
-#include <hw/isa.h>
+#include <hw/isa/isa.h>
 #include "block/block.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/dma.h"
@@ -226,7 +226,7 @@ static void via_ide_class_init(ObjectClass *klass, void *data)
     dc->no_user = 1;
 }
 
-static TypeInfo via_ide_info = {
+static const TypeInfo via_ide_info = {
     .name          = "via-ide",
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCIIDEState),

@@ -9,6 +9,13 @@
 #include <sys/signal.h>
 #endif
 
+#ifndef _WIN32
+#include <sys/wait.h>
+#else
+#define WIFEXITED(x)   1
+#define WEXITSTATUS(x) (x)
+#endif
+
 #include <sys/time.h>
 
 #if defined(CONFIG_SOLARIS) && CONFIG_SOLARIS_VERSION < 10
@@ -58,6 +65,10 @@ typedef signed int              int_fast16_t;
 #endif
 #ifndef MAX
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
+#endif
+
+#ifndef ROUND_UP
+#define ROUND_UP(n,d) (((n) + (d) - 1) & -(d))
 #endif
 
 #ifndef DIV_ROUND_UP

@@ -23,9 +23,9 @@
  * THE SOFTWARE.
  */
 #include <hw/hw.h>
-#include <hw/pc.h>
+#include <hw/i386/pc.h>
 #include <hw/pci/pci.h>
-#include <hw/isa.h>
+#include <hw/isa/isa.h>
 #include "block/block.h"
 #include "sysemu/dma.h"
 
@@ -311,7 +311,6 @@ void bmdma_cmd_writeb(BMDMAState *bm, uint32_t val)
             if (bm->bus->dma->aiocb) {
                 bdrv_drain_all();
                 assert(bm->bus->dma->aiocb == NULL);
-                assert((bm->status & BM_STATUS_DMAING) == 0);
             }
         } else {
             bm->cur_addr = bm->addr;
