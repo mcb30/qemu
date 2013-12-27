@@ -183,6 +183,8 @@ static inline int m6502_interrupts_enabled ( CPUM6502State *env ) {
 }
 #define cpu_interrupts_enabled m6502_interrupts_enabled
 
+extern void m6502_interrupt ( CPUState *s );
+
 static inline int m6502_mmu_index ( CPUM6502State *env ) {
 	return 0;
 }
@@ -201,12 +203,10 @@ extern void m6502_dump_stack ( CPUM6502State *env, FILE *f,
 #define cpu_save m6502_save
 #define cpu_load m6502_load
 #define tlb_fill m6502_tlb_fill
-#define do_interrupt m6502_interrupt
 #define cpu_get_phys_page_debug m6502_get_phys_page_debug
 
 int m6502_exec(CPUM6502State *env);
 void m6502_close(CPUM6502State *env);
-void do_interrupt(CPUM6502State *env);
 /* you can call this signal handler from your SIGBUS and SIGSEGV
    signal handlers to inform the virtual CPU of exceptions. non zero
    is returned if the signal was handled by the virtual CPU.  */

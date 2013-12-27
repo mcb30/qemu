@@ -48,21 +48,42 @@ static void m6502_reset ( CPUState *s ) {
 	env->pc = *reset;
 }
 
+static void m6502_realize ( DeviceState *dev, Error **errp ) {
+	M6502CPU *cpu = M6502_CPU ( dev );
+	M6502CPUClass *mcc = M6502_CPU_GET_CLASS ( dev );
+
+	qemu_init_vcpu ( &cpu->env );
+	mcc->parent_realize ( dev, errp );
+}
+
 static void m6502_instance_init ( Object *obj ) {
+	CPUState *cs = CPU ( obj );
 	M6502CPU *cpu = M6502_CPU ( obj );
 	CPUM6502State *env = &cpu->env;
+	static int tcg_initialized = 0;
 
+	cs->env_ptr = &cpu->env;
 	cpu_exec_init ( env );
 	cpu_reset ( CPU ( cpu ) );
+
+	/* Initialise TCG, if applicable */
+	if ( tcg_enabled() && ! tcg_initialized ) {
+		tcg_initialized = 1;
+		m6502_translate_init();
+	}
 }
 
 static void m6502_class_init ( ObjectClass *oc, void *data ) {
+	DeviceClass *dc = DEVICE_CLASS ( oc );
 	M6502CPUClass *mcc = M6502_CPU_CLASS ( oc );
 	CPUClass *cc = CPU_CLASS ( oc );
 
 	/* Intercept reset() method */
 	mcc->parent_reset = cc->reset;
 	cc->reset = m6502_reset;
+	mcc->parent_realize = dc->realize;
+	dc->realize = m6502_realize;
+	cc->do_interrupt = m6502_interrupt;
 }
 
 static const TypeInfo m6502_type_info = {

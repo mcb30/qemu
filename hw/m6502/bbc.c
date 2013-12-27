@@ -17,13 +17,13 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "hw.h"
-#include "boards.h"
+#include "hw/hw.h"
+#include "hw/boards.h"
 #include "exec/address-spaces.h"
 #include "sysemu/sysemu.h"
 #include "ui/console.h"
-#include "char/char.h"
-#include "loader.h"
+#include "sysemu/char.h"
+#include "hw/loader.h"
 #include "bbc.h"
 #include "bbc_1770.h"
 #include "bbc_8272.h"
@@ -555,6 +555,7 @@ static void bbc_interrupt ( BBCMicro *bbc, bool *active, uint16_t *count,
 		[CPU_INTERRUPT_HARD] = "IRQ",
 		[CPU_INTERRUPT_NMI] = "NMI",
 	};
+	CPUState *cs = ENV_GET_CPU ( bbc->cpu );
 
 	/* Do nothing unless interrupt has changed */
 	level = ( !! level );
@@ -567,7 +568,7 @@ static void bbc_interrupt ( BBCMicro *bbc, bool *active, uint16_t *count,
 	/* Assert or deassert CPU interrupt if applicable */
 	if ( level ) {
 		if ( ! *count ) {
-			cpu_interrupt ( bbc->cpu, cpu_irq_type );
+			cpu_interrupt ( cs, cpu_irq_type );
 			qemu_log_mask ( CPU_LOG_INT, "%s: asserted %s\n",
 					bbc_name ( bbc ),
 					cpu_irq_type_name[cpu_irq_type] );
@@ -576,7 +577,7 @@ static void bbc_interrupt ( BBCMicro *bbc, bool *active, uint16_t *count,
 	} else {
 		(*count)--;
 		if ( ! *count ) {
-			cpu_reset_interrupt ( bbc->cpu, cpu_irq_type );
+			cpu_reset_interrupt ( cs, cpu_irq_type );
 			qemu_log_mask ( CPU_LOG_INT, "%s: deasserted %s\n",
 					bbc_name ( bbc ),
 					cpu_irq_type_name[cpu_irq_type] );

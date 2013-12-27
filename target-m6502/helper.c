@@ -86,7 +86,6 @@ CPUM6502State * m6502_init ( const char *name ) {
 	const M6502Model *model;
 	M6502CPU *cpu;
 	CPUM6502State *env;
-	static int tcg_initialized = 0;
 
 	/* Identify model */
 	model = m6502_find ( name );
@@ -99,13 +98,7 @@ CPUM6502State * m6502_init ( const char *name ) {
 	env->features = model->features;
 
 	/* Initialise CPU */
-	qemu_init_vcpu ( env );
-
-	/* Initialise TCG, if applicable */
-	if ( tcg_enabled() && ! tcg_initialized ) {
-		tcg_initialized = 1;
-		m6502_translate_init();
-	}
+	object_property_set_bool ( OBJECT ( cpu ), true, "realized", NULL );
 
 	return env;
 }
@@ -187,7 +180,9 @@ void m6502_rti ( CPUM6502State *env ) {
 	env->in_nmi = 0;
 }
 
-void m6502_interrupt ( CPUM6502State *env ) {
+void m6502_interrupt ( CPUState *s ) {
+	M6502CPU *cpu = M6502_CPU ( s );
+	CPUM6502State *env = &cpu->env;
 
 	switch ( env->exception_index ) {
 	case EXCP_IRQ:

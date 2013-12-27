@@ -20,7 +20,7 @@
 #ifndef HW_BBC_H
 #define HW_BBC_H
 
-#include "sysbus.h"
+#include "hw/sysbus.h"
 #include "mc6845.h"
 #include "mc6850.h"
 #include "m6522.h"

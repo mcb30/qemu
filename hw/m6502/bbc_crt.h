@@ -20,7 +20,7 @@
 #ifndef HW_BBC_CRT_H
 #define HW_BBC_CRT_H
 
-#include "ui/qemu-pixman.h"
+#include "ui/console.h"
 
 /** CRT pixel clock speed (in log2(MHz))
  *
@@ -133,7 +133,7 @@ typedef struct {
 	/** Bitmap is invalid */
 	int invalid;
 	/** Graphical console */
-	DisplayState *ds;
+	QemuConsole *ds;
 } BBCDisplay;
 
 extern BBCDisplay * bbc_crt_init ( const char *name, MemoryRegion *parent,

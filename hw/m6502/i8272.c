@@ -17,10 +17,10 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "hw.h"
-#include "boards.h"
+#include "hw/hw.h"
+#include "hw/boards.h"
 #include "exec/address-spaces.h"
-#include "sysbus.h"
+#include "hw/sysbus.h"
 #include "i8272.h"
 
 #define DEBUG_I8272 1

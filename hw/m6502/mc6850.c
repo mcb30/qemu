@@ -17,8 +17,8 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "hw.h"
-#include "boards.h"
+#include "hw/hw.h"
+#include "hw/boards.h"
 #include "exec/address-spaces.h"
 #include "mc6850.h"
 

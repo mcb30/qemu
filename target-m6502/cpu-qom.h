@@ -43,6 +43,7 @@ typedef struct M6502CPUClass {
     CPUClass parent_class;
     /*< public >*/
     void (*parent_reset)(CPUState *cpu);
+    void (*parent_realize)(DeviceState *cpu, Error **errp);
 } M6502CPUClass;
 
 /**
@@ -63,5 +64,7 @@ static inline M6502CPU * m6502_env_get_cpu ( CPUM6502State *env ) {
 }
 
 #define ENV_GET_CPU( env ) CPU ( m6502_env_get_cpu ( env ) )
+
+#define ENV_OFFSET offsetof ( M6502CPU, env )
 
 #endif

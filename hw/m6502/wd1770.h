@@ -20,7 +20,7 @@
 #ifndef HW_WD1770_H
 #define HW_WD1770_H
 
-#include "sysbus.h"
+#include "hw/sysbus.h"
 
 typedef struct WD1770FDC WD1770FDC;
 

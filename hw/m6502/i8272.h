@@ -20,7 +20,7 @@
 #ifndef HW_I8272_H
 #define HW_I8272_H
 
-#include "sysbus.h"
+#include "hw/sysbus.h"
 
 typedef struct I8272FDC I8272FDC;
 

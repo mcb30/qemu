@@ -1562,7 +1562,7 @@ static void m6502_gen_intermediate_code_internal ( CPUM6502State *env,
 	max_insns = ( tb->cflags & CF_COUNT_MASK );
 	if ( max_insns == 0 )
 		max_insns = CF_COUNT_MASK;
-	gen_icount_start();
+	gen_tb_start();
 
 	/* Main instruction generation loop */
 	LOG_DIS ( "&%04X : start (search_pc=%d, max_insn=%d)\n",
@@ -1604,7 +1604,7 @@ static void m6502_gen_intermediate_code_internal ( CPUM6502State *env,
 	}
 
 	/* Finalise translation block */
-	gen_icount_end ( tb, dc->num_insns );
+	gen_tb_end ( tb, dc->num_insns );
 	*tcg_ctx.gen_opc_ptr = INDEX_op_end;
 	if ( search_pc ) {
 		m6502_opcode_metadata ( dc );

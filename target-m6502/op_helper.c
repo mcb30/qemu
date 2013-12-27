@@ -33,8 +33,9 @@
 #endif
 
 void helper_hlt ( CPUM6502State *env ) {
+	CPUState *s = ENV_GET_CPU ( env );
 
-	env->halted = 1;
+	s->halted = 1;
 	env->exception_index = EXCP_HLT;
 	cpu_loop_exit ( env );
 }

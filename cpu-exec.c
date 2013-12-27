@@ -398,15 +398,15 @@ int cpu_exec(CPUArchState *env)
 #elif defined(TARGET_M6502)
 		    if ((interrupt_request & CPU_INTERRUPT_NMI)
 			&& (!env->in_nmi)) {
-			env->interrupt_request &= ~CPU_INTERRUPT_NMI;
+			cpu->interrupt_request &= ~CPU_INTERRUPT_NMI;
                         env->exception_index = EXCP_NMI;
-                        do_interrupt(env);
+                        cc->do_interrupt(cpu);
                         next_tb = 0;
 		    }
                     if ((interrupt_request & CPU_INTERRUPT_HARD)
 			&& (!env->in_nmi) && (!env->p_i)) {
                         env->exception_index = EXCP_IRQ;
-                        do_interrupt(env);
+                        cc->do_interrupt(cpu);
                         next_tb = 0;
                     }
 #elif defined(TARGET_MICROBLAZE)

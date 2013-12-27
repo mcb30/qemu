@@ -17,12 +17,12 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "hw.h"
-#include "boards.h"
+#include "hw/hw.h"
+#include "hw/boards.h"
 #include "exec/address-spaces.h"
 #include "sysemu/sysemu.h"
 #include "ui/console.h"
-#include "vga_int.h"
+#include "ui/qemu-pixman.h"
 #include "bbc.h"
 
 #define DEBUG_CRT 1
@@ -441,6 +441,7 @@ static void bbc_crt_update_region ( BBCDisplay *crt,
  */
 static void bbc_crt_update ( void *opaque ) {
 	BBCDisplay *crt = opaque;
+	DisplaySurface *surface = qemu_console_surface ( crt->ds );
 
 	/* Do nothing unless we have an image */
 	if ( ! crt->image )
@@ -462,7 +463,7 @@ static void bbc_crt_update ( void *opaque ) {
 	}
 
 	pixman_image_composite ( PIXMAN_OP_SRC, crt->image, NULL,
-				 crt->ds->surface->image, 0, 0, 0, 0,
+				 surface->image, 0, 0, 0, 0,
 				 0, 0, crt->width, crt->height );
 	dpy_gfx_update ( crt->ds, 0, 0, crt->width, crt->height );
 }
@@ -477,29 +478,6 @@ static void bbc_crt_invalidate ( void *opaque ) {
 
 	/* Mark display as invalid */
 	crt->invalid = 1;
-}
-
-/**
- * Create a screen dump
- *
- * @v opaque		BBC display
- * @v filename		Filename
- * @v cswitch		Console is not currently displayed
- * @ret errp		Error pointer
- */
-static void bbc_crt_screen_dump ( void *opaque, const char *filename,
-				  bool cswitch, Error **errp ) {
-	BBCDisplay *crt = opaque;
-
-	/* Invalidate display if currently displaying a different console */
-	if ( cswitch )
-		bbc_crt_invalidate ( crt );
-
-	/* Update display */
-	bbc_crt_update ( crt );
-
-	/* Dump display to PPM file */
-	ppm_save ( filename, crt->ds->surface, errp );
 }
 
 /**
@@ -541,6 +519,12 @@ static void bbc_crt_ula_updated ( void *opaque ) {
 	bbc_crt_resize ( crt );
 }
 
+/** CRT graphics operations */
+static const struct GraphicHwOps bbc_crt_ops = {
+	.gfx_update = bbc_crt_update,
+	.invalidate = bbc_crt_invalidate,
+};
+
 /**
  * Initialise CRT
  *
@@ -569,9 +553,7 @@ BBCDisplay * bbc_crt_init ( const char *name, MemoryRegion *ram,
 	memory_region_set_enabled ( &crt->vram, false );
 
 	/* Initialise graphic console */
-	crt->ds = graphic_console_init ( bbc_crt_update,
-					 bbc_crt_invalidate,
-					 bbc_crt_screen_dump, NULL, crt );
+	crt->ds = graphic_console_init ( &bbc_crt_ops, crt );
 
 	/* Register for updates to CRTC and Video ULA registers */
 	mc6845_update_register ( crt->crtc, bbc_crt_crtc_updated, crt );
