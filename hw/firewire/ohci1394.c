@@ -97,7 +97,9 @@ typedef struct OHCI1394State {
     uint32_t bus_management[4];
 
     /* PHY registers */
-    uint8_t phy4;
+    uint8_t phy_reset;
+    uint8_t phy_link;
+    uint8_t phy_misc;
     uint8_t phy_select;
 
 } OHCI1394State;
@@ -159,6 +161,10 @@ ohci1394_soft_reset(OHCI1394State *s)
     s->phy_control = 0;
     s->asynchronous_request_filter = 0;
     s->physical_request_filter = 0;
+    s->phy_reset = OHCI1394_PHY_RESET_GAP_COUNT_DEFAULT;
+    s->phy_link = OHCI1394_PHY_LINK_LCTRL;
+    s->phy_misc = 0;
+    s->phy_select = 0;
 
     /* Include effects of bus reset */
     ohci1394_bus_reset(s);
@@ -327,12 +333,51 @@ static const OHCI1394PhyRegisterOp ohci1394_op_phy_readonly = {
 };
 
 /*
- * PHY4 register
+ * PHY reset register
  *
  */
 
-static const OHCI1394PhyRegister ohci1394_phy4 =
-    OHCI1394_PHY_REG(phy4, &ohci1394_op_phy, NULL);
+static void
+ohci1394_phy_reset_notify(OHCI1394State *s)
+{
+    if (s->phy_reset & OHCI1394_PHY_RESET_IBR) {
+	DBG("initiate bus reset\n");
+	s->phy_reset &= ~OHCI1394_PHY_RESET_IBR;
+	ohci1394_bus_reset(s);
+    }
+}
+
+static const OHCI1394PhyRegister ohci1394_phy_reset =
+    OHCI1394_PHY_REG(phy_reset, &ohci1394_op_phy, ohci1394_phy_reset_notify);
+
+/*
+ * PHY link register
+ *
+ */
+
+static const OHCI1394PhyRegister ohci1394_phy_link =
+    OHCI1394_PHY_REG(phy_link, &ohci1394_op_phy, NULL);
+
+/*
+ * PHY misc register
+ *
+ */
+
+static void
+ohci1394_phy_misc_notify(OHCI1394State *s)
+{
+    if (s->phy_misc & OHCI1394_PHY_MISC_ISBR) {
+	DBG("initiate short bus reset\n");
+	s->phy_misc &= ~OHCI1394_PHY_MISC_ISBR;
+	ohci1394_bus_reset(s);
+    }
+    s->phy_misc &= ~(OHCI1394_PHY_MISC_PWR_FAIL |
+		     OHCI1394_PHY_MISC_TIMEOUT |
+		     OHCI1394_PHY_MISC_PORT_EVENT);
+}
+
+static const OHCI1394PhyRegister ohci1394_phy_misc =
+    OHCI1394_PHY_REG(phy_misc, &ohci1394_op_phy, ohci1394_phy_misc_notify);
 
 /*
  * PHY select register
@@ -361,7 +406,9 @@ static const OHCI1394PhyRegister ohci1394_phy_select =
 	    = _register
 
 static const OHCI1394PhyRegister *ohci1394_phy_regs[] = {
-    OHCI1394_PHY_MAP(0, 0, OHCI1394_PHY4, &ohci1394_phy4),
+    OHCI1394_PHY_MAP(0, 0, OHCI1394_PHY_RESET, &ohci1394_phy_reset),
+    OHCI1394_PHY_MAP(0, 0, OHCI1394_PHY_LINK, &ohci1394_phy_link),
+    OHCI1394_PHY_MAP(0, 0, OHCI1394_PHY_MISC, &ohci1394_phy_misc),
     OHCI1394_PHY_MAP(0, 0, OHCI1394_PHY_SELECT, &ohci1394_phy_select),
 };
 
@@ -816,15 +863,17 @@ ohci1394_phy_write(OHCI1394State *s, unsigned int addr, uint8_t val)
     if ((index < ARRAY_SIZE(ohci1394_phy_regs)) &&
 	(r = ohci1394_phy_regs[index])) {
 	if (r->op->write) {
-	    DBG("PHY 0x%x(%x/%x/%x) <= 0x%02x %s\n",
+	    DBG("P0x%x(%x/%x/%x) <= 0x%02x %s\n",
 		addr, page, port, index, val, r->name);
 	    r->op->write(s, r, val);
+	    if (r->notify)
+		r->notify(s);
 	} else {
-	    DBG("PHY 0x%x(%x/%x/%x) <= 0x%02x %s READ-ONLY\n",
+	    DBG("P0x%x(%x/%x/%x) <= 0x%02x %s READ-ONLY\n",
 		addr, page, port, index, val, r->name);
 	}
     } else {
-	DBG("PHY 0x%x(%x/%x/%x) <= 0x%02x UNKNOWN\n",
+	DBG("P0x%x(%x/%x/%x) <= 0x%02x UNKNOWN\n",
 	    addr, page, port, index, val);
     }
 }
@@ -841,11 +890,11 @@ ohci1394_phy_read(OHCI1394State *s, unsigned int addr)
     if ((index < ARRAY_SIZE(ohci1394_phy_regs)) &&
 	(r = ohci1394_phy_regs[index])) {
 	val = r->op->read(s, r);
-	DBG("PHY 0x%x(%x/%x/%x) => 0x%02x %s\n",
+	DBG("P0x%x(%x/%x/%x) => 0x%02x %s\n",
 	    addr, page, port, index, val, r->name);
     } else {
 	val = 0;
-	DBG("PHY 0x%x(%x/%x/%x) => 0x%02x UNKNOWN\n",
+	DBG("P0x%x(%x/%x/%x) => 0x%02x UNKNOWN\n",
 	    addr, page, port, index, val);
     }
     return val;
@@ -1114,7 +1163,9 @@ static const VMStateDescription vmstate_ohci1394 = {
 	VMSTATE_UINT64(physical_request_filter, OHCI1394State),
 	VMSTATE_UINT32(physical_upper_bound, OHCI1394State),
 	VMSTATE_UINT32_ARRAY(bus_management, OHCI1394State, 4),
-	VMSTATE_UINT8(phy4, OHCI1394State),
+	VMSTATE_UINT8(phy_reset, OHCI1394State),
+	VMSTATE_UINT8(phy_link, OHCI1394State),
+	VMSTATE_UINT8(phy_misc, OHCI1394State),
 	VMSTATE_UINT8(phy_select, OHCI1394State),
 	VMSTATE_END_OF_LIST()
     },
