@@ -53,7 +53,7 @@
 /* QEMU/Bochs VGA (0x1234) */
 #define PCI_VENDOR_ID_QEMU               0x1234
 #define PCI_DEVICE_ID_QEMU_VGA           0x1111
-#define PCI_DEVICE_ID_QEMU_OHCI1394      0x2222
+#define PCI_DEVICE_ID_QEMU_OHCI1394      0xf17e
 
 /* VMWare (0x15ad) */
 #define PCI_VENDOR_ID_VMWARE             0x15ad
