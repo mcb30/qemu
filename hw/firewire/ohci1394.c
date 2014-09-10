@@ -96,6 +96,10 @@ typedef struct OHCI1394State {
     /* Bus management resource registers (compare-and-swap access only) */
     uint32_t bus_management[4];
 
+    /* PHY registers */
+    uint8_t phy4;
+    uint8_t phy_select;
+
 } OHCI1394State;
 
 /*
@@ -131,6 +135,11 @@ ohci1394_bus_reset(OHCI1394State *s)
 	( s->initial_channels_available >> 32 );
     s->bus_management[OHCI1394_CHANNELS_AVAILABLE_LO] =
 	( s->initial_channels_available >> 0 );
+
+    // hack
+    s->node_id |= (OHCI1394_NODE_ID_NODE_NUMBER(2) |
+		   OHCI1394_NODE_ID_ROOT |
+		   OHCI1394_NODE_ID_ID_VALID);
 }
 
 static void
@@ -192,9 +201,10 @@ ohci1394_hard_reset(OHCI1394State *s)
 static int
 ohci1394_can_receive(NetClientState *nc)
 {
+    OHCI1394State *s = qemu_get_nic_opaque(nc);
 
-    //
-    return 1;
+    return ((s->hc_control & OHCI1394_HC_CONTROL_LINK_ENABLE) &&
+	    (s->hc_control & OHCI1394_HC_CONTROL_LPS));
 }
 
 static ssize_t
@@ -217,11 +227,14 @@ ohci1394_receive(NetClientState *nc, const uint8_t *buf, size_t len)
 }
 
 static void
-ohci1394_link_status_changed(NetClientState *nc)
+ohci1394_set_link_status(NetClientState *nc)
 {
     OHCI1394State *s = qemu_get_nic_opaque(nc);
 
-    //
+    DBG("link is %s\n", (nc->link_down ? "down" : "up"));
+    s->node_id &= ~OHCI1394_NODE_ID_CPS;
+    if (!nc->link_down)
+	s->node_id |= OHCI1394_NODE_ID_CPS;
     ohci1394_bus_reset(s);
 }
 
@@ -239,8 +252,117 @@ static NetClientInfo ohci1394_net_info = {
     .can_receive = ohci1394_can_receive,
     .receive_iov = ohci1394_receive_iov,
     .receive = ohci1394_receive,
-    .link_status_changed = ohci1394_link_status_changed,
+    .link_status_changed = ohci1394_set_link_status,
     .cleanup = ohci1394_cleanup,
+};
+
+/*
+ * PHY registers
+ *
+ */
+
+typedef struct OHCI1394PhyRegisterOp OHCI1394PhyRegisterOp;
+
+typedef struct OHCI1394PhyRegister {
+    /* Name */
+    const char *name;
+    /* Offset within OHCI1394State */
+    unsigned int offset;
+    /* Register read/write operations */
+    const OHCI1394PhyRegisterOp *op;
+    /* Handle register updates */
+    void (*notify) (OHCI1394State *s);
+} OHCI1394PhyRegister;
+
+struct OHCI1394PhyRegisterOp {
+    void (*write) (OHCI1394State *s, const OHCI1394PhyRegister *r, uint8_t val);
+    uint8_t (*read) (OHCI1394State *s, const OHCI1394PhyRegister *r);
+};
+
+#define OHCI1394_PHY_REG(_field, _op, _notify) {		\
+	.name = #_field,					\
+	.offset = offsetof(OHCI1394State, _field),		\
+	.op = _op,						\
+	.notify = _notify,					\
+    }
+
+/*
+ * Access to 8-bit PHY register
+ *
+ */
+
+static inline uint8_t *
+ohci1394_phy_reg(OHCI1394State *s, const OHCI1394PhyRegister *r)
+{
+    return (((uint8_t *)s) + r->offset);
+}
+
+/*
+ * 8-bit PHY register operations 
+ *
+ */
+
+static void
+ohci1394_phy_reg_write(OHCI1394State *s, const OHCI1394PhyRegister *r,
+		       uint8_t val)
+{
+    uint8_t *reg = ohci1394_phy_reg(s, r);
+    *reg = val;
+}
+
+static uint8_t
+ohci1394_phy_reg_read(OHCI1394State *s, const OHCI1394PhyRegister *r)
+{
+    uint8_t *reg = ohci1394_phy_reg(s, r);
+    return *reg;
+}
+
+static const OHCI1394PhyRegisterOp ohci1394_op_phy = {
+    .write = ohci1394_phy_reg_write,
+    .read = ohci1394_phy_reg_read,
+};
+
+static const OHCI1394PhyRegisterOp ohci1394_op_phy_readonly = {
+    .read = ohci1394_phy_reg_read,
+};
+
+/*
+ * PHY4 register
+ *
+ */
+
+static const OHCI1394PhyRegister ohci1394_phy4 =
+    OHCI1394_PHY_REG(phy4, &ohci1394_op_phy, NULL);
+
+/*
+ * PHY select register
+ *
+ */
+
+static const OHCI1394PhyRegister ohci1394_phy_select =
+    OHCI1394_PHY_REG(phy_select, &ohci1394_op_phy, NULL);
+
+/*
+ * PHY register map
+ *
+ */
+
+#define OHCI1394_PHY_REG_INDEX(_page, _port, _addr)		\
+    (((_addr) < 0x08) ?						\
+     /* Unpaged registers */					\
+     (_addr) : ((_page) ?					\
+		/* Paged non-port-specific registers */		\
+		(((_page) * 0x08) + (_addr)) :			\
+		/* Paged port-specific registers */		\
+		((_port) ? -1U : (_addr))))
+
+#define OHCI1394_PHY_MAP(_page, _port, _addr, _register)	\
+    [OHCI1394_PHY_REG_INDEX( (_page), (_port), (_addr) )]	\
+	    = _register
+
+static const OHCI1394PhyRegister *ohci1394_phy_regs[] = {
+    OHCI1394_PHY_MAP(0, 0, OHCI1394_PHY4, &ohci1394_phy4),
+    OHCI1394_PHY_MAP(0, 0, OHCI1394_PHY_SELECT, &ohci1394_phy_select),
 };
 
 /*
@@ -251,6 +373,8 @@ static NetClientInfo ohci1394_net_info = {
 typedef struct OHCI1394RegisterOp OHCI1394RegisterOp;
 
 typedef struct OHCI1394Register {
+    /* Name */
+    const char *name;
     /* Base address within BAR */
     unsigned int base;
     /* Offset within OHCI1394State */
@@ -269,6 +393,7 @@ struct OHCI1394RegisterOp {
 };
 
 #define OHCI1394_REG(_base, _field, _op, _notify) {		\
+	.name = #_field,					\
 	.base = _base,						\
 	.offset = offsetof(OHCI1394State, _field),		\
 	.op = _op,						\
@@ -681,35 +806,67 @@ static const OHCI1394Register ohci1394_node_id =
  */
 
 static void
-ohci1394_phy_write(OHCI1394State *s, unsigned int addr, uint8_t data)
+ohci1394_phy_write(OHCI1394State *s, unsigned int addr, uint8_t val)
 {
-    DBG("PHY 0x%x <= 0x%02x\n", addr, data);
+    unsigned int page = OHCI1394_PHY_SELECT_PAGE(s->phy_select);
+    unsigned int port = OHCI1394_PHY_SELECT_PORT(s->phy_select);
+    unsigned int index = OHCI1394_PHY_REG_INDEX(page, port, addr);
+    const OHCI1394PhyRegister *r;
+
+    if ((index < ARRAY_SIZE(ohci1394_phy_regs)) &&
+	(r = ohci1394_phy_regs[index])) {
+	if (r->op->write) {
+	    DBG("PHY 0x%x(%x/%x/%x) <= 0x%02x %s\n",
+		addr, page, port, index, val, r->name);
+	    r->op->write(s, r, val);
+	} else {
+	    DBG("PHY 0x%x(%x/%x/%x) <= 0x%02x %s READ-ONLY\n",
+		addr, page, port, index, val, r->name);
+	}
+    } else {
+	DBG("PHY 0x%x(%x/%x/%x) <= 0x%02x UNKNOWN\n",
+	    addr, page, port, index, val);
+    }
 }
 
 static uint8_t
 ohci1394_phy_read(OHCI1394State *s, unsigned int addr)
 {
-    uint8_t data = 0xff;
-    DBG("PHY 0x%x => 0x%02x\n", addr, data);
-    return data;
+    unsigned int page = OHCI1394_PHY_SELECT_PAGE(s->phy_select);
+    unsigned int port = OHCI1394_PHY_SELECT_PORT(s->phy_select);
+    unsigned int index = OHCI1394_PHY_REG_INDEX(page, port, addr);
+    const OHCI1394PhyRegister *r;
+    uint8_t val;
+
+    if ((index < ARRAY_SIZE(ohci1394_phy_regs)) &&
+	(r = ohci1394_phy_regs[index])) {
+	val = r->op->read(s, r);
+	DBG("PHY 0x%x(%x/%x/%x) => 0x%02x %s\n",
+	    addr, page, port, index, val, r->name);
+    } else {
+	val = 0;
+	DBG("PHY 0x%x(%x/%x/%x) => 0x%02x UNKNOWN\n",
+	    addr, page, port, index, val);
+    }
+    return val;
 }
 
 static void
 ohci1394_phy_control_notify(OHCI1394State *s)
 {
     unsigned int addr = OHCI1394_PHY_CONTROL_REG_ADDR(s->phy_control);
-    unsigned int data = OHCI1394_PHY_CONTROL_WR_DATA(s->phy_control);
+    unsigned int val = OHCI1394_PHY_CONTROL_WR_DATA(s->phy_control);
 
     if (s->phy_control & OHCI1394_PHY_CONTROL_WR_REG) {
-	ohci1394_phy_write(s, addr, data);
+	ohci1394_phy_write(s, addr, val);
 	s->phy_control &= ~OHCI1394_PHY_CONTROL_WR_REG;
     }
     if (s->phy_control & OHCI1394_PHY_CONTROL_RD_REG) {
-	data = ohci1394_phy_read(s, addr);
+	val = ohci1394_phy_read(s, addr);
 	s->phy_control &= ~(OHCI1394_PHY_CONTROL_RD_REG |
 			    OHCI1394_PHY_CONTROL_RD_DATA_MASK |
 			    OHCI1394_PHY_CONTROL_RD_ADDR_MASK);
-	s->phy_control |= (OHCI1394_PHY_CONTROL_RD_DATA(data) |
+	s->phy_control |= (OHCI1394_PHY_CONTROL_RD_DATA(val) |
 			   OHCI1394_PHY_CONTROL_RD_ADDR(addr) |
 			   OHCI1394_PHY_CONTROL_RD_DONE);
     }
@@ -820,16 +977,20 @@ ohci1394_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
     OHCI1394State *s = opaque;
     unsigned int offset = (addr & OHCI1394_BAR_MASK);
     unsigned int index = OHCI1394_REG_INDEX(offset);
+    unsigned int r_offset;
     const OHCI1394Register *r;
 
     if ((index < ARRAY_SIZE(ohci1394_regs)) && (r = ohci1394_regs[index])) {
+	r_offset = (offset - r->base);
 	if (r->op->write) {
-	    DBG("0x%03x <= 0x%08"PRIx64"\n", offset, val);
-	    r->op->write(s, r, (offset - r->base), val);
+	    DBG("0x%03x <= 0x%08"PRIx64" %s.%x\n",
+		offset, val, r->name, r_offset);
+	    r->op->write(s, r, r_offset, val);
 	    if ( r->notify )
 		r->notify(s);
 	} else {
-	    DBG("0x%03x <= 0x%08"PRIx64" READ-ONLY\n", offset, val);
+	    DBG("0x%03x <= 0x%08"PRIx64" %s.%x READ-ONLY\n",
+		offset, val, r->name, r_offset);
 	}
     } else {
 	DBG("0x%03x <= 0x%08"PRIx64" UNKNOWN\n", offset, val);
@@ -842,12 +1003,14 @@ ohci1394_mmio_read(void *opaque, hwaddr addr, unsigned int size)
     OHCI1394State *s = opaque;
     unsigned int offset = (addr & OHCI1394_BAR_MASK);
     unsigned int index = OHCI1394_REG_INDEX(offset);
+    unsigned int r_offset;
     const OHCI1394Register *r;
     uint32_t val;
 
     if ((index < ARRAY_SIZE(ohci1394_regs)) && (r = ohci1394_regs[index])) {
-	val = r->op->read(s, r, (offset - r->base));
-	DBG("0x%03x => 0x%08x\n", offset, val);
+	r_offset = (offset - r->base);
+	val = r->op->read(s, r, r_offset);
+	DBG("0x%03x => 0x%08x %s.%x\n",	offset, val, r->name, r_offset);
     } else {
 	val = -1U;
 	DBG("0x%03x => 0x%08x UNKNOWN\n", offset, val);
@@ -907,6 +1070,7 @@ ohci1394_reset(DeviceState *d)
 {
     OHCI1394State *s = OHCI1394(d);
     ohci1394_hard_reset(s);
+    ohci1394_set_link_status(qemu_get_queue(s->nic));
 };
 
 #define VMSTATE_OHCI1394_EVENTMASK(_field, _state)		\
@@ -950,6 +1114,8 @@ static const VMStateDescription vmstate_ohci1394 = {
 	VMSTATE_UINT64(physical_request_filter, OHCI1394State),
 	VMSTATE_UINT32(physical_upper_bound, OHCI1394State),
 	VMSTATE_UINT32_ARRAY(bus_management, OHCI1394State, 4),
+	VMSTATE_UINT8(phy4, OHCI1394State),
+	VMSTATE_UINT8(phy_select, OHCI1394State),
 	VMSTATE_END_OF_LIST()
     },
 };
