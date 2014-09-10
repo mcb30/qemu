@@ -105,6 +105,33 @@ typedef struct OHCI1394State {
 } OHCI1394State;
 
 /*
+ * Interrupts
+ *
+ */
+
+static void
+ohci1394_set_irq(OHCI1394State *s)
+{
+    int intr;
+
+    /* Update interrupt status */
+    s->intr.event &= ~(OHCI1394_INTR_ISOCH_TX | OHCI1394_INTR_ISOCH_RX);
+    if (s->iso_xmit_intr.event & s->iso_xmit_intr.mask)
+	s->intr.event |= OHCI1394_INTR_ISOCH_TX;
+    if (s->iso_recv_intr.event & s->iso_recv_intr.mask)
+	s->intr.event |= OHCI1394_INTR_ISOCH_RX;
+    intr = ((s->intr.mask & OHCI1394_INTR_MASTER_ENABLE) ?
+	    (s->intr.event & s->intr.mask) : 0);
+    DBG("intr %s (%08x:%08x,%08x:%08x,%08x:%08x)\n",
+	(intr ? "asserted" : "deasserted"), s->intr.event, s->intr.mask,
+	s->iso_xmit_intr.event, s->iso_xmit_intr.mask,
+	s->iso_recv_intr.event, s->iso_recv_intr.mask);
+
+    /* Report interrupt status */
+    pci_set_irq(&s->pci, !!intr);
+}
+
+/*
  * Reset
  *
  */
@@ -142,6 +169,12 @@ ohci1394_bus_reset(OHCI1394State *s)
     s->node_id |= (OHCI1394_NODE_ID_NODE_NUMBER(2) |
 		   OHCI1394_NODE_ID_ROOT |
 		   OHCI1394_NODE_ID_ID_VALID);
+
+    /* Generate interrupt */
+    s->intr.event |= (OHCI1394_INTR_BUS_RESET |
+		      OHCI1394_INTR_SELF_ID_COMPLETE |
+		      OHCI1394_INTR_SELF_ID_COMPLETE_2);
+    ohci1394_set_irq(s);
 }
 
 static void
@@ -790,21 +823,21 @@ static const OHCI1394Register ohci1394_ir_multi_chan_mask =
 		 &ohci1394_op_hilo_setclear, NULL);
 
 /*
- * Interrupt event/mask registers
+ * {Int,IsoXmitInt,IsoRecvInt}{Event,Mask} registers
  *
  */
 
 static const OHCI1394Register ohci1394_intr =
     OHCI1394_REG(OHCI1394_INTR, intr,
-		 &ohci1394_op_eventmask, NULL);
+		 &ohci1394_op_eventmask, ohci1394_set_irq);
 
 static const OHCI1394Register ohci1394_iso_xmit_intr =
     OHCI1394_REG(OHCI1394_ISO_XMIT_INTR, iso_xmit_intr,
-		 &ohci1394_op_eventmask, NULL);
+		 &ohci1394_op_eventmask, ohci1394_set_irq);
 
 static const OHCI1394Register ohci1394_iso_recv_intr =
     OHCI1394_REG(OHCI1394_ISO_RECV_INTR, iso_recv_intr,
-		 &ohci1394_op_eventmask, NULL);
+		 &ohci1394_op_eventmask, ohci1394_set_irq);
 
 /*
  * Initial availability registers
