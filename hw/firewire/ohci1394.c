@@ -22,6 +22,8 @@
 
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
+#include "net/net.h"
+#include "qemu/iov.h"
 #include "ohci1394_regs.h"
 
 /*
@@ -55,6 +57,9 @@ typedef struct OHCI1394State {
     /*< private >*/
     PCIDevice pci;
     /*< public >*/
+
+    NICState *nic;
+    NICConf conf;
     MemoryRegion bar_mem;
 
     /* Device registers */
@@ -79,6 +84,7 @@ typedef struct OHCI1394State {
     OHCI1394EventMask iso_recv_intr;
     uint32_t initial_bandwidth_available;
     uint64_t initial_channels_available;
+    uint32_t fairness_control;
     uint32_t link_control;
     uint32_t node_id;
     uint32_t phy_control;
@@ -97,7 +103,9 @@ typedef struct OHCI1394State {
  *
  */
 
-static void ohci1394_bus_reset(OHCI1394State *s) {
+static void
+ohci1394_bus_reset(OHCI1394State *s)
+{
     dma_addr_t config_rom;
     dma_addr_t cr_config_rom_hdr;
     dma_addr_t cr_bus_options;
@@ -125,8 +133,11 @@ static void ohci1394_bus_reset(OHCI1394State *s) {
 	( s->initial_channels_available >> 0 );
 }
 
-static void ohci1394_soft_reset(OHCI1394State *s) {
+static void
+ohci1394_soft_reset(OHCI1394State *s)
+{
 
+    /* Set soft-reset initial values */
     s->at_retries = 0;
     s->csr_control = OHCI1394_CSR_CONTROL_CSR_DONE;
     s->config_rom_hdr = 0;
@@ -140,24 +151,97 @@ static void ohci1394_soft_reset(OHCI1394State *s) {
     s->asynchronous_request_filter = 0;
     s->physical_request_filter = 0;
 
+    /* Include effects of bus reset */
     ohci1394_bus_reset(s);
 }
 
-static void ohci1394_hard_reset(OHCI1394State *s) {
+static void
+ohci1394_hard_reset(OHCI1394State *s)
+{
+    union {
+	uint64_t be64;
+	uint8_t bytes[8];
+    } guid;
 
+    /* Construct GUID from MAC address */
+    memcpy(&guid.bytes[0], &s->conf.macaddr.a[0], 3);
+    guid.bytes[3] = 0;
+    guid.bytes[4] = 0;
+    memcpy(&guid.bytes[5], &s->conf.macaddr.a[3], 3);
+
+    /* Set hard-reset initial values */
     s->version = OHCI1394_VERSION_1_1;
     s->bus_id = OHCI1394_BUS_ID_1394;
     s->bus_options = (OHCI1394_BUS_OPTIONS_MAX_REC_DEFAULT |
 		      OHCI1394_BUS_OPTIONS_LINK_SPD_DEFAULT);
-    // hack
-    s->guid = 0x0123456789abcdefULL;
+    s->guid = be64_to_cpu(guid.be64);
     s->config_rom_map = 0;
     s->vendor_id = 0;
     s->hc_control = 0;
     s->link_control = 0;
 
+    /* Include effects of soft reset */
     ohci1394_soft_reset(s);
 }
+
+/*
+ * Network device (FireWire-over-Ethernet) interface
+ *
+ */
+
+static int
+ohci1394_can_receive(NetClientState *nc)
+{
+
+    //
+    return 1;
+}
+
+static ssize_t
+ohci1394_receive_iov(NetClientState *nc, const struct iovec *iov, int iovcnt)
+{
+
+    //
+    return -1;
+}
+
+static ssize_t
+ohci1394_receive(NetClientState *nc, const uint8_t *buf, size_t len)
+{
+    const struct iovec iov = {
+	.iov_base = (uint8_t *)buf,
+	.iov_len = len,
+    };
+
+    return ohci1394_receive_iov(nc, &iov, 1);
+}
+
+static void
+ohci1394_link_status_changed(NetClientState *nc)
+{
+    OHCI1394State *s = qemu_get_nic_opaque(nc);
+
+    //
+    ohci1394_bus_reset(s);
+}
+
+static void
+ohci1394_cleanup(NetClientState *nc)
+{
+    OHCI1394State *s = qemu_get_nic_opaque(nc);
+
+    s->nic = NULL;
+}
+
+static NetClientInfo ohci1394_net_info = {
+    .type = NET_CLIENT_OPTIONS_KIND_NIC,
+    .size = sizeof(NICState),
+    .can_receive = ohci1394_can_receive,
+    .receive_iov = ohci1394_receive_iov,
+    .receive = ohci1394_receive,
+    .link_status_changed = ohci1394_link_status_changed,
+    .cleanup = ohci1394_cleanup,
+};
 
 /*
  * Device registers
@@ -216,15 +300,17 @@ ohci1394_reg32(OHCI1394State *s, const OHCI1394Register *r, bool high)
  *
  */
 
-static void ohci1394_reg32_write(OHCI1394State *s, const OHCI1394Register *r,
-				 unsigned int offset, uint32_t val)
+static void
+ohci1394_reg32_write(OHCI1394State *s, const OHCI1394Register *r,
+		     unsigned int offset, uint32_t val)
 {
     uint32_t *reg = ohci1394_reg32(s, r, 0);
     *reg = val;
 }
 
-static uint32_t ohci1394_reg32_read(OHCI1394State *s, const OHCI1394Register *r,
-				    unsigned int offset)
+static uint32_t
+ohci1394_reg32_read(OHCI1394State *s, const OHCI1394Register *r,
+		    unsigned int offset)
 {
     uint32_t *reg = ohci1394_reg32(s, r, 0);
     return *reg;
@@ -244,15 +330,17 @@ static const OHCI1394RegisterOp ohci1394_op_reg32_readonly = {
  *
  */
 
-static void ohci1394_hilo_write(OHCI1394State *s, const OHCI1394Register *r,
-				unsigned int offset, uint32_t val)
+static void
+ohci1394_hilo_write(OHCI1394State *s, const OHCI1394Register *r,
+		    unsigned int offset, uint32_t val)
 {
     uint32_t *reg = ohci1394_reg32(s, r, !offset);
     *reg = val;
 }
 
-static uint32_t ohci1394_hilo_read(OHCI1394State *s, const OHCI1394Register *r,
-				   unsigned int offset)
+static uint32_t
+ohci1394_hilo_read(OHCI1394State *s, const OHCI1394Register *r,
+		   unsigned int offset)
 {
     uint32_t *reg = ohci1394_reg32(s, r, !offset);
     return *reg;
@@ -403,7 +491,8 @@ static const OHCI1394Register ohci1394_at_retries =
  *
  */
 
-static void ohci1394_csr_control_notify(OHCI1394State *s)
+static void
+ohci1394_csr_control_notify(OHCI1394State *s)
 {
     unsigned int csr_sel = OHCI1394_CSR_CONTROL_CSR_SEL(s->csr_control);
     uint32_t *bus_reg = &s->bus_management[csr_sel];
@@ -493,7 +582,8 @@ static const OHCI1394Register ohci1394_vendor_id =
  *
  */
 
-static void ohci1394_hc_control_notify(OHCI1394State *s)
+static void
+ohci1394_hc_control_notify(OHCI1394State *s)
 {
     if (s->hc_control & OHCI1394_HC_CONTROL_SOFT_RESET) {
 	DBG("soft reset\n");
@@ -560,6 +650,15 @@ static const OHCI1394Register ohci1394_initial_channels_available =
 		 &ohci1394_op_hilo, NULL);
 
 /*
+ * FairnessControl register
+ *
+ */
+
+static const OHCI1394Register ohci1394_fairness_control =
+    OHCI1394_REG(OHCI1394_FAIRNESS_CONTROL, fairness_control,
+		 &ohci1394_op_reg32, NULL);
+
+/*
  * LinkControl register
  *
  */
@@ -581,19 +680,22 @@ static const OHCI1394Register ohci1394_node_id =
  *
  */
 
-static void ohci1394_phy_write(OHCI1394State *s, unsigned int addr,
-			       uint8_t data)
+static void
+ohci1394_phy_write(OHCI1394State *s, unsigned int addr, uint8_t data)
 {
-    DBG("PHY write 0x%x = 0x%02x\n", addr, data);
+    DBG("PHY 0x%x <= 0x%02x\n", addr, data);
 }
 
-static uint8_t ohci1394_phy_read(OHCI1394State *s, unsigned int addr)
+static uint8_t
+ohci1394_phy_read(OHCI1394State *s, unsigned int addr)
 {
-    DBG("PHY read 0x%x\n", addr);
-    return 0;
+    uint8_t data = 0xff;
+    DBG("PHY 0x%x => 0x%02x\n", addr, data);
+    return data;
 }
 
-static void ohci1394_phy_control_notify(OHCI1394State *s)
+static void
+ohci1394_phy_control_notify(OHCI1394State *s)
 {
     unsigned int addr = OHCI1394_PHY_CONTROL_REG_ADDR(s->phy_control);
     unsigned int data = OHCI1394_PHY_CONTROL_WR_DATA(s->phy_control);
@@ -693,6 +795,7 @@ static const OHCI1394Register *ohci1394_regs[] = {
 		  &ohci1394_initial_bandwidth_available),
     OHCI1394_MAP2(OHCI1394_INITIAL_CHANNELS_AVAILABLE,
 		  &ohci1394_initial_channels_available),
+    OHCI1394_MAP1(OHCI1394_FAIRNESS_CONTROL, &ohci1394_fairness_control),
     OHCI1394_MAP2(OHCI1394_LINK_CONTROL, &ohci1394_link_control),
     OHCI1394_MAP1(OHCI1394_NODE_ID, &ohci1394_node_id),
     OHCI1394_MAP1(OHCI1394_PHY_CONTROL, &ohci1394_phy_control),
@@ -711,45 +814,45 @@ static const OHCI1394Register *ohci1394_regs[] = {
  *
  */
 
-static void ohci1394_mmio_write(void *opaque, hwaddr addr, uint64_t val,
-				unsigned size)
+static void
+ohci1394_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
 {
     OHCI1394State *s = opaque;
     unsigned int offset = (addr & OHCI1394_BAR_MASK);
     unsigned int index = OHCI1394_REG_INDEX(offset);
     const OHCI1394Register *r;
 
-    DBG("write to register 0x%03x: 0x%08"PRIx64"\n", offset, val);
-
     if ((index < ARRAY_SIZE(ohci1394_regs)) && (r = ohci1394_regs[index])) {
 	if (r->op->write) {
+	    DBG("0x%03x <= 0x%08"PRIx64"\n", offset, val);
 	    r->op->write(s, r, (offset - r->base), val);
 	    if ( r->notify )
 		r->notify(s);
 	} else {
-	    DBG("write to read-only register 0x%03x: 0x%08"PRIx64"\n",
-		offset, val);
+	    DBG("0x%03x <= 0x%08"PRIx64" READ-ONLY\n", offset, val);
 	}
     } else {
-	DBG("write to unknown register 0x%03x: 0x%08"PRIx64"\n", offset, val);
+	DBG("0x%03x <= 0x%08"PRIx64" UNKNOWN\n", offset, val);
     }
 }
 
-static uint64_t ohci1394_mmio_read(void *opaque, hwaddr addr, unsigned size)
+static uint64_t
+ohci1394_mmio_read(void *opaque, hwaddr addr, unsigned int size)
 {
     OHCI1394State *s = opaque;
     unsigned int offset = (addr & OHCI1394_BAR_MASK);
     unsigned int index = OHCI1394_REG_INDEX(offset);
     const OHCI1394Register *r;
-
-    DBG("read from register 0x%03x\n", offset);
+    uint32_t val;
 
     if ((index < ARRAY_SIZE(ohci1394_regs)) && (r = ohci1394_regs[index])) {
-	return r->op->read(s, r, (offset - r->base));
+	val = r->op->read(s, r, (offset - r->base));
+	DBG("0x%03x => 0x%08x\n", offset, val);
     } else {
-	DBG("read from unknown register 0x%03x\n", offset);
-	return -1ULL;
+	val = -1U;
+	DBG("0x%03x => 0x%08x UNKNOWN\n", offset, val);
     }
+    return val;
 }
 
 static const MemoryRegionOps ohci1394_mmio_ops = {
@@ -767,9 +870,11 @@ static const MemoryRegionOps ohci1394_mmio_ops = {
  *
  */
 
-static int pci_ohci1394_init(PCIDevice *dev)
+static int
+pci_ohci1394_init(PCIDevice *dev)
 {
     OHCI1394State *s = OHCI1394(dev);
+    DeviceState *d = DEVICE(dev);
     uint8_t *pci_conf;
 
     /* Fill in PCI configuration space */
@@ -780,17 +885,25 @@ static int pci_ohci1394_init(PCIDevice *dev)
 			  "ohci1394", OHCI1394_BAR_SIZE);
     pci_register_bar(dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &s->bar_mem);
 
+    /* Register network device */
+    qemu_macaddr_default_if_unset(&s->conf.macaddr);
+    s->nic = qemu_new_nic(&ohci1394_net_info, &s->conf,
+			  object_get_typename(OBJECT(s)), d->id, s);
+    qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+
     return 0;
 }
 
-static void pci_ohci1394_uninit(PCIDevice *dev)
+static void
+pci_ohci1394_uninit(PCIDevice *dev)
 {
     OHCI1394State *s = OHCI1394(dev);
 
     printf("*** OHCI1394 uninit %p\n", s);
 }
 
-static void ohci1394_reset(DeviceState *d)
+static void
+ohci1394_reset(DeviceState *d)
 {
     OHCI1394State *s = OHCI1394(d);
     ohci1394_hard_reset(s);
@@ -806,6 +919,7 @@ static const VMStateDescription vmstate_ohci1394 = {
     .minimum_version_id = 1,
     .fields = (VMStateField[]) {
 	VMSTATE_PCI_DEVICE(pci, OHCI1394State),
+	VMSTATE_MACADDR(conf.macaddr, OHCI1394State),
 	VMSTATE_UINT32(version, OHCI1394State),
 	VMSTATE_UINT32(at_retries, OHCI1394State),
 	VMSTATE_UINT32(csr_data, OHCI1394State),
@@ -827,6 +941,7 @@ static const VMStateDescription vmstate_ohci1394 = {
 	VMSTATE_OHCI1394_EVENTMASK(iso_recv_intr, OHCI1394State),
 	VMSTATE_UINT32(initial_bandwidth_available, OHCI1394State),
 	VMSTATE_UINT64(initial_channels_available, OHCI1394State),
+	VMSTATE_UINT32(fairness_control, OHCI1394State),
 	VMSTATE_UINT32(link_control, OHCI1394State),
 	VMSTATE_UINT32(node_id, OHCI1394State),
 	VMSTATE_UINT32(phy_control, OHCI1394State),
@@ -840,10 +955,12 @@ static const VMStateDescription vmstate_ohci1394 = {
 };
 
 static Property ohci1394_properties[] = {
+    DEFINE_NIC_PROPERTIES(OHCI1394State, conf),
     DEFINE_PROP_END_OF_LIST(),
 };
 
-static void ohci1394_class_init(ObjectClass *klass, void *data)
+static void
+ohci1394_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
@@ -856,7 +973,7 @@ static void ohci1394_class_init(ObjectClass *klass, void *data)
     dc->reset = ohci1394_reset;
     dc->vmsd = &vmstate_ohci1394;
     dc->props = ohci1394_properties;
-    set_bit(DEVICE_CATEGORY_MISC, dc->categories);
+    set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
 }
 
 static const TypeInfo ohci1394_info = {
@@ -866,7 +983,8 @@ static const TypeInfo ohci1394_info = {
     .class_init    = ohci1394_class_init,
 };
 
-static void ohci1394_register_types(void)
+static void
+ohci1394_register_types(void)
 {
     type_register_static(&ohci1394_info);
 }
