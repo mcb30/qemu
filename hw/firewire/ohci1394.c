@@ -143,6 +143,13 @@ ohci1394_bus_reset(OHCI1394State *s)
     dma_addr_t cr_config_rom_hdr;
     dma_addr_t cr_bus_options;
 
+    /* Set bus-reset initial values */
+    s->self_id_count =
+	((s->self_id_count + OHCI1394_SELF_ID_COUNT_GENERATION_INC) &
+	 OHCI1394_SELF_ID_COUNT_GENERATION_MASK);
+    s->intr.event &= ~OHCI1394_INTR_SELF_ID_COMPLETE;
+    s->intr.event |= OHCI1394_INTR_BUS_RESET;
+
     /* Update configuration ROM if applicable */
     if (s->hc_control & OHCI1394_HC_CONTROL_BIB_IMAGE_VALID) {
 	s->config_rom_map = s->config_rom_map_next;
@@ -165,15 +172,25 @@ ohci1394_bus_reset(OHCI1394State *s)
     s->bus_management[OHCI1394_CHANNELS_AVAILABLE_LO] =
 	( s->initial_channels_available >> 0 );
 
-    // hack
-    s->node_id |= (OHCI1394_NODE_ID_NODE_NUMBER(2) |
+    // hack self-ID
+    uint32_t self_ids[] = {
+	(s->self_id_count & OHCI1394_SELF_ID_COUNT_GENERATION_MASK),
+	((1 << 31) | SELF_ID_PHY_ID(0) | SELF_ID_LINK_ON | SELF_ID_CONTENDER |
+	 (2 << 6)),
+	~self_ids[1],
+	((1 << 31) | SELF_ID_PHY_ID(1) | SELF_ID_LINK_ON | SELF_ID_CONTENDER |
+	 (3 << 6)),
+	~self_ids[3],
+    };
+    s->node_id |= (OHCI1394_NODE_ID_NODE_NUMBER(1) |
 		   OHCI1394_NODE_ID_ROOT |
 		   OHCI1394_NODE_ID_ID_VALID);
+    pci_dma_write(&s->pci, s->self_id_buffer, self_ids, sizeof(self_ids));
+    s->self_id_count |= sizeof(self_ids);
+    s->intr.event |= (OHCI1394_INTR_SELF_ID_COMPLETE |
+		      OHCI1394_INTR_SELF_ID_COMPLETE_2);
 
     /* Generate interrupt */
-    s->intr.event |= (OHCI1394_INTR_BUS_RESET |
-		      OHCI1394_INTR_SELF_ID_COMPLETE |
-		      OHCI1394_INTR_SELF_ID_COMPLETE_2);
     ohci1394_set_irq(s);
 }
 
@@ -187,6 +204,7 @@ ohci1394_soft_reset(OHCI1394State *s)
     s->config_rom_hdr = 0;
     s->hc_control &= (OHCI1394_HC_CONTROL_PROGRAM_PHY_ENABLE |
 		      OHCI1394_HC_CONTROL_A_PHY_ENHANCE_ENABLE);
+    s->intr.mask &= ~OHCI1394_INTR_MASTER_ENABLE;
     s->initial_bandwidth_available =
 	OHCI1394_INITIAL_BANDWIDTH_AVAILABLE_DEFAULT;
     s->initial_channels_available = OHCI1394_INITIAL_CHANNELS_AVAILABLE_DEFAULT;
