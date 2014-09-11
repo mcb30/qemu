@@ -53,6 +53,12 @@ typedef struct OHCI1394EventMask {
     uint32_t mask;
 } OHCI1394EventMask;
 
+typedef struct OHCI1394DmaContext {
+    uint32_t context_control;
+    uint32_t command_ptr;
+    uint32_t context_match;	/* Isochronous receive contexts only */
+} OHCI1394DmaContext;
+
 typedef struct OHCI1394State {
     /*< private >*/
     PCIDevice pci;
@@ -62,16 +68,28 @@ typedef struct OHCI1394State {
     NICConf conf;
     MemoryRegion bar_mem;
 
-    /* Device registers */
+    /* PHY registers, in (page,address) order */
+    uint8_t phy_reset;
+    uint8_t phy_link;
+    uint8_t phy_misc;
+    uint8_t phy_select;
+
+    /* Device registers, in address order */
     uint32_t version;
     uint32_t at_retries;
     uint32_t csr_data;
     uint32_t csr_compare_data;
     uint32_t csr_control;
-    uint32_t config_rom_hdr;
-    uint32_t bus_id;
-    uint32_t bus_options;
-    uint64_t guid;
+    union {
+	uint32_t numbered[5];
+	struct {
+	    uint32_t config_rom_hdr;
+	    uint32_t bus_id;
+	    uint32_t bus_options;
+	    uint32_t guid_hi;
+	    uint32_t guid_lo;
+	};
+    } config_rom;
     uint32_t config_rom_map;
     uint32_t config_rom_map_next; /* Shadow register */
     uint32_t vendor_id;
@@ -92,15 +110,23 @@ typedef struct OHCI1394State {
     uint64_t asynchronous_request_filter;
     uint64_t physical_request_filter;
     uint32_t physical_upper_bound;
+    OHCI1394DmaContext async_request_tx;
+    OHCI1394DmaContext async_response_tx;
+    OHCI1394DmaContext async_request_rx;
+    OHCI1394DmaContext async_response_rx;
+    OHCI1394DmaContext isoch_tx[32];
+    OHCI1394DmaContext isoch_rx[32];
 
     /* Bus management resource registers (compare-and-swap access only) */
-    uint32_t bus_management[4];
-
-    /* PHY registers */
-    uint8_t phy_reset;
-    uint8_t phy_link;
-    uint8_t phy_misc;
-    uint8_t phy_select;
+    union {
+	uint32_t numbered[4];
+	struct {
+	    uint32_t bus_manager_id;
+	    uint32_t bandwidth_available;
+	    uint32_t channels_available_hi;
+	    uint32_t channels_available_lo;
+	};
+    } bus_management;
 
 } OHCI1394State;
 
@@ -136,12 +162,15 @@ ohci1394_set_irq(OHCI1394State *s)
  *
  */
 
+#define OHCI1394_CONFIG_ROM_OFFSET(_field) \
+    offsetof(typeof(((OHCI1394State *)NULL)->config_rom), _field)
+
 static void
 ohci1394_bus_reset(OHCI1394State *s)
 {
     dma_addr_t config_rom;
-    dma_addr_t cr_config_rom_hdr;
-    dma_addr_t cr_bus_options;
+    unsigned int config_rom_hdr_offset;
+    unsigned int bus_options_offset;
 
     /* Set bus-reset initial values */
     s->self_id_count =
@@ -154,22 +183,23 @@ ohci1394_bus_reset(OHCI1394State *s)
     if (s->hc_control & OHCI1394_HC_CONTROL_BIB_IMAGE_VALID) {
 	s->config_rom_map = s->config_rom_map_next;
 	config_rom = (s->config_rom_map & OHCI1394_CONFIG_ROM_MAP_MASK);
-	cr_config_rom_hdr = (config_rom + OHCI1394_CR_CONFIG_ROM_HDR);
-	cr_bus_options = (config_rom + OHCI1394_CR_BUS_OPTIONS);
-	s->config_rom_hdr = ldl_le_pci_dma(&s->pci, cr_config_rom_hdr);
-	s->bus_options = ldl_le_pci_dma(&s->pci, cr_bus_options);
+	config_rom_hdr_offset = OHCI1394_CONFIG_ROM_OFFSET(config_rom_hdr);
+	bus_options_offset = OHCI1394_CONFIG_ROM_OFFSET(bus_options);
+	s->config_rom.config_rom_hdr =
+	    ldl_le_pci_dma(&s->pci, (config_rom + config_rom_hdr_offset));
+	s->config_rom.bus_options =
+	    ldl_le_pci_dma(&s->pci, (config_rom + bus_options_offset));
 	DBG("config ROM at 0x%08x header 0x%08x options 0x%08x\n",
-	    s->config_rom_map, s->config_rom_hdr, s->bus_options);
+	    s->config_rom_map, s->config_rom.config_rom_hdr,
+	    s->config_rom.bus_options);
     }
 
     /* Load bus management resource registers */
-    s->bus_management[OHCI1394_BUS_MANAGER_ID] =
-	OHCI1394_BUS_MANAGER_ID_DEFAULT;
-    s->bus_management[OHCI1394_BANDWIDTH_AVAILABLE] =
-	s->initial_bandwidth_available;
-    s->bus_management[OHCI1394_CHANNELS_AVAILABLE_HI] =
+    s->bus_management.bus_manager_id = OHCI1394_BUS_MANAGER_ID_DEFAULT;
+    s->bus_management.bandwidth_available = s->initial_bandwidth_available;
+    s->bus_management.channels_available_hi =
 	( s->initial_channels_available >> 32 );
-    s->bus_management[OHCI1394_CHANNELS_AVAILABLE_LO] =
+    s->bus_management.channels_available_lo =
 	( s->initial_channels_available >> 0 );
 
     // hack self-ID
@@ -201,7 +231,7 @@ ohci1394_soft_reset(OHCI1394State *s)
     /* Set soft-reset initial values */
     s->at_retries = 0;
     s->csr_control = OHCI1394_CSR_CONTROL_CSR_DONE;
-    s->config_rom_hdr = 0;
+    s->config_rom.config_rom_hdr = 0;
     s->hc_control &= (OHCI1394_HC_CONTROL_PROGRAM_PHY_ENABLE |
 		      OHCI1394_HC_CONTROL_A_PHY_ENHANCE_ENABLE);
     s->intr.mask &= ~OHCI1394_INTR_MASTER_ENABLE;
@@ -225,22 +255,28 @@ static void
 ohci1394_hard_reset(OHCI1394State *s)
 {
     union {
-	uint64_t be64;
-	uint8_t bytes[8];
-    } guid;
+	uint32_t be32;
+	uint8_t bytes[4];
+    } guid_hi;
+    union {
+	uint32_t be32;
+	uint8_t bytes[4];
+    } guid_lo;
 
     /* Construct GUID from MAC address */
-    memcpy(&guid.bytes[0], &s->conf.macaddr.a[0], 3);
-    guid.bytes[3] = 0;
-    guid.bytes[4] = 0;
-    memcpy(&guid.bytes[5], &s->conf.macaddr.a[3], 3);
+    memcpy(&guid_hi.bytes[0], &s->conf.macaddr.a[0], 3);
+    guid_hi.bytes[3] = 0;
+    guid_lo.bytes[0] = 0;
+    memcpy(&guid_lo.bytes[1], &s->conf.macaddr.a[3], 3);
 
     /* Set hard-reset initial values */
     s->version = OHCI1394_VERSION_1_1;
-    s->bus_id = OHCI1394_BUS_ID_1394;
-    s->bus_options = (OHCI1394_BUS_OPTIONS_MAX_REC_DEFAULT |
-		      OHCI1394_BUS_OPTIONS_LINK_SPD_DEFAULT);
-    s->guid = be64_to_cpu(guid.be64);
+    s->config_rom.config_rom_hdr = 0;
+    s->config_rom.bus_id = OHCI1394_BUS_ID_1394;
+    s->config_rom.bus_options = (OHCI1394_BUS_OPTIONS_MAX_REC_DEFAULT |
+				 OHCI1394_BUS_OPTIONS_LINK_SPD_DEFAULT);
+    s->config_rom.guid_hi = be32_to_cpu(guid_hi.be32);
+    s->config_rom.guid_lo = be32_to_cpu(guid_lo.be32);
     s->config_rom_map = 0;
     s->vendor_id = 0;
     s->hc_control = 0;
@@ -332,8 +368,10 @@ typedef struct OHCI1394PhyRegister {
 } OHCI1394PhyRegister;
 
 struct OHCI1394PhyRegisterOp {
-    void (*write) (OHCI1394State *s, const OHCI1394PhyRegister *r, uint8_t val);
-    uint8_t (*read) (OHCI1394State *s, const OHCI1394PhyRegister *r);
+    void (*write) (OHCI1394State *s, const OHCI1394PhyRegister *r,
+		   unsigned int port, uint8_t val);
+    uint8_t (*read) (OHCI1394State *s, const OHCI1394PhyRegister *r,
+		     unsigned int port);
 };
 
 #define OHCI1394_PHY_REG(_field, _op, _notify) {		\
@@ -361,14 +399,15 @@ ohci1394_phy_reg(OHCI1394State *s, const OHCI1394PhyRegister *r)
 
 static void
 ohci1394_phy_reg_write(OHCI1394State *s, const OHCI1394PhyRegister *r,
-		       uint8_t val)
+		       unsigned int port, uint8_t val)
 {
     uint8_t *reg = ohci1394_phy_reg(s, r);
     *reg = val;
 }
 
 static uint8_t
-ohci1394_phy_reg_read(OHCI1394State *s, const OHCI1394PhyRegister *r)
+ohci1394_phy_reg_read(OHCI1394State *s, const OHCI1394PhyRegister *r,
+		      unsigned int port)
 {
     uint8_t *reg = ohci1394_phy_reg(s, r);
     return *reg;
@@ -443,28 +482,21 @@ static const OHCI1394PhyRegister ohci1394_phy_select =
  *
  */
 
-#define OHCI1394_PHY_REG_INDEX(_page, _port, _addr)		\
-    (((_addr) < 0x08) ?						\
-     /* Unpaged registers */					\
-     (_addr) : ((_page) ?					\
-		/* Paged non-port-specific registers */		\
-		(((_page) * 0x08) + (_addr)) :			\
-		/* Paged port-specific registers */		\
-		((_port) ? -1U : (_addr))))
+#define OHCI1394_PHY_REG_INDEX(_page, _addr) \
+    (((_addr) < 0x08) ? (_addr) : ((_page) * 0x08) + (_addr))
 
-#define OHCI1394_PHY_MAP(_page, _port, _addr, _register)	\
-    [OHCI1394_PHY_REG_INDEX( (_page), (_port), (_addr) )]	\
-	    = _register
+#define OHCI1394_PHY_MAP(_page, _addr, _register) \
+    [OHCI1394_PHY_REG_INDEX( (_page), (_addr) )] = _register
 
 static const OHCI1394PhyRegister *ohci1394_phy_regs[] = {
-    OHCI1394_PHY_MAP(0, 0, OHCI1394_PHY_RESET, &ohci1394_phy_reset),
-    OHCI1394_PHY_MAP(0, 0, OHCI1394_PHY_LINK, &ohci1394_phy_link),
-    OHCI1394_PHY_MAP(0, 0, OHCI1394_PHY_MISC, &ohci1394_phy_misc),
-    OHCI1394_PHY_MAP(0, 0, OHCI1394_PHY_SELECT, &ohci1394_phy_select),
+    OHCI1394_PHY_MAP(0, OHCI1394_PHY_RESET, &ohci1394_phy_reset),
+    OHCI1394_PHY_MAP(0, OHCI1394_PHY_LINK, &ohci1394_phy_link),
+    OHCI1394_PHY_MAP(0, OHCI1394_PHY_MISC, &ohci1394_phy_misc),
+    OHCI1394_PHY_MAP(0, OHCI1394_PHY_SELECT, &ohci1394_phy_select),
 };
 
 /*
- * Device registers
+ * Device control registers
  *
  */
 
@@ -499,7 +531,7 @@ struct OHCI1394RegisterOp {
     }
 
 /*
- * Access to 32-bit portion of (possibly 64-bit) device register
+ * Access to 32-bit portion of (possibly 64-bit) device control register
  *
  */
 
@@ -519,7 +551,7 @@ ohci1394_reg32(OHCI1394State *s, const OHCI1394Register *r, bool high)
 }
 
 /*
- * 32-bit device register operations 
+ * 32-bit device control register operations 
  *
  */
 
@@ -549,7 +581,7 @@ static const OHCI1394RegisterOp ohci1394_op_reg32_readonly = {
 };
 
 /*
- * 64-bit high/low device register operations
+ * 64-bit high/low device control register operations
  *
  */
 
@@ -579,7 +611,7 @@ static const OHCI1394RegisterOp ohci1394_op_hilo_readonly = {
 };
 
 /*
- * Set/clear device register operations
+ * Set/clear device control register operations
  *
  */
 
@@ -610,7 +642,7 @@ static const OHCI1394RegisterOp ohci1394_op_setclear = {
 };
 
 /*
- * 64-bit high/low set/clear device register operations
+ * 64-bit high/low set/clear device control register operations
  *
  */
 
@@ -641,7 +673,7 @@ static const OHCI1394RegisterOp ohci1394_op_hilo_setclear = {
 };
 
 /*
- * Event/mask device register operations
+ * Event/mask device control register operations
  *
  */
 
@@ -718,7 +750,7 @@ static void
 ohci1394_csr_control_notify(OHCI1394State *s)
 {
     unsigned int csr_sel = OHCI1394_CSR_CONTROL_CSR_SEL(s->csr_control);
-    uint32_t *bus_reg = &s->bus_management[csr_sel];
+    uint32_t *bus_reg = &s->bus_management.numbered[csr_sel];
 
     s->csr_data = atomic_cmpxchg(bus_reg, s->csr_compare_data, s->csr_data);
     s->csr_control |= OHCI1394_CSR_CONTROL_CSR_DONE;
@@ -742,7 +774,7 @@ static const OHCI1394Register ohci1394_csr_control =
  */
 
 static const OHCI1394Register ohci1394_config_rom_hdr =
-    OHCI1394_REG(OHCI1394_CONFIG_ROM_HDR, config_rom_hdr,
+    OHCI1394_REG(OHCI1394_CONFIG_ROM_HDR, config_rom.config_rom_hdr,
 		 &ohci1394_op_reg32, NULL);
 
 /*
@@ -751,7 +783,8 @@ static const OHCI1394Register ohci1394_config_rom_hdr =
  */
 
 static const OHCI1394Register ohci1394_bus_id =
-    OHCI1394_REG(OHCI1394_BUS_ID, bus_id, &ohci1394_op_reg32_readonly, NULL);
+    OHCI1394_REG(OHCI1394_BUS_ID, config_rom.bus_id,
+		 &ohci1394_op_reg32_readonly, NULL);
 
 /*
  * BusOptions register
@@ -759,15 +792,21 @@ static const OHCI1394Register ohci1394_bus_id =
  */
 
 static const OHCI1394Register ohci1394_bus_options =
-    OHCI1394_REG(OHCI1394_BUS_OPTIONS, bus_options, &ohci1394_op_reg32, NULL);
+    OHCI1394_REG(OHCI1394_BUS_OPTIONS, config_rom.bus_options,
+		 &ohci1394_op_reg32, NULL);
 
 /*
  * GUID register
  *
  */
 
-static const OHCI1394Register ohci1394_guid =
-    OHCI1394_REG(OHCI1394_GUID, guid, &ohci1394_op_hilo_readonly, NULL);
+static const OHCI1394Register ohci1394_guid_hi =
+    OHCI1394_REG(OHCI1394_GUID_HI, config_rom.guid_hi,
+		 &ohci1394_op_reg32_readonly, NULL);
+
+static const OHCI1394Register ohci1394_guid_lo =
+    OHCI1394_REG(OHCI1394_GUID_LO, config_rom.guid_lo,
+		 &ohci1394_op_reg32_readonly, NULL);
 
 /*
  * ConfigROMmap register
@@ -908,7 +947,7 @@ ohci1394_phy_write(OHCI1394State *s, unsigned int addr, uint8_t val)
 {
     unsigned int page = OHCI1394_PHY_SELECT_PAGE(s->phy_select);
     unsigned int port = OHCI1394_PHY_SELECT_PORT(s->phy_select);
-    unsigned int index = OHCI1394_PHY_REG_INDEX(page, port, addr);
+    unsigned int index = OHCI1394_PHY_REG_INDEX(page, addr);
     const OHCI1394PhyRegister *r;
 
     if ((index < ARRAY_SIZE(ohci1394_phy_regs)) &&
@@ -916,7 +955,7 @@ ohci1394_phy_write(OHCI1394State *s, unsigned int addr, uint8_t val)
 	if (r->op->write) {
 	    DBG("P0x%x(%x/%x/%x) <= 0x%02x %s\n",
 		addr, page, port, index, val, r->name);
-	    r->op->write(s, r, val);
+	    r->op->write(s, r, port, val);
 	    if (r->notify)
 		r->notify(s);
 	} else {
@@ -934,13 +973,13 @@ ohci1394_phy_read(OHCI1394State *s, unsigned int addr)
 {
     unsigned int page = OHCI1394_PHY_SELECT_PAGE(s->phy_select);
     unsigned int port = OHCI1394_PHY_SELECT_PORT(s->phy_select);
-    unsigned int index = OHCI1394_PHY_REG_INDEX(page, port, addr);
+    unsigned int index = OHCI1394_PHY_REG_INDEX(page, addr);
     const OHCI1394PhyRegister *r;
     uint8_t val;
 
     if ((index < ARRAY_SIZE(ohci1394_phy_regs)) &&
 	(r = ohci1394_phy_regs[index])) {
-	val = r->op->read(s, r);
+	val = r->op->read(s, r, port);
 	DBG("P0x%x(%x/%x/%x) => 0x%02x %s\n",
 	    addr, page, port, index, val, r->name);
     } else {
@@ -1010,24 +1049,22 @@ static const OHCI1394Register ohci1394_physical_upper_bound =
 		 &ohci1394_op_reg32, NULL);
 
 /*
- * Device register map
+ * Device control register map
  *
  */
 
-#define OHCI1394_REG_INDEX(_offset) ((_offset) >> 2)
+#define OHCI1394_REG_INDEX(_bar_offset) ((_bar_offset) >> 2)
 
-#define OHCI1394_MAP1(_offset, _register)			\
-    [OHCI1394_REG_INDEX(_offset) + 0] = _register
+#define OHCI1394_MAP1(_bar_offset, _register)			\
+    [OHCI1394_REG_INDEX(_bar_offset) + 0] = _register
 
-#define OHCI1394_MAP2(_offset, _register)			\
-    [OHCI1394_REG_INDEX(_offset) + 0] = _register,		\
-    [OHCI1394_REG_INDEX(_offset) + 1] = _register
+#define OHCI1394_MAP2(_bar_offset, _register)			\
+    OHCI1394_MAP1(((_bar_offset) + 0x0), _register),		\
+    OHCI1394_MAP1(((_bar_offset) + 0x4), _register)
 
-#define OHCI1394_MAP4(_offset, _register)			\
-    [OHCI1394_REG_INDEX(_offset) + 0] = _register,		\
-    [OHCI1394_REG_INDEX(_offset) + 1] = _register,		\
-    [OHCI1394_REG_INDEX(_offset) + 2] = _register,		\
-    [OHCI1394_REG_INDEX(_offset) + 3] = _register
+#define OHCI1394_MAP4(_bar_offset, _register)			\
+    OHCI1394_MAP2(((_bar_offset) + 0x0), _register),		\
+    OHCI1394_MAP2(((_bar_offset) + 0x8), _register)
 
 static const OHCI1394Register *ohci1394_regs[] = {
     OHCI1394_MAP1(OHCI1394_VERSION, &ohci1394_version),
@@ -1038,7 +1075,8 @@ static const OHCI1394Register *ohci1394_regs[] = {
     OHCI1394_MAP1(OHCI1394_CONFIG_ROM_HDR, &ohci1394_config_rom_hdr),
     OHCI1394_MAP1(OHCI1394_BUS_ID, &ohci1394_bus_id),
     OHCI1394_MAP1(OHCI1394_BUS_OPTIONS, &ohci1394_bus_options),
-    OHCI1394_MAP2(OHCI1394_GUID, &ohci1394_guid),
+    OHCI1394_MAP1(OHCI1394_GUID_HI, &ohci1394_guid_hi),
+    OHCI1394_MAP1(OHCI1394_GUID_LO, &ohci1394_guid_lo),
     OHCI1394_MAP1(OHCI1394_CONFIG_ROM_MAP, &ohci1394_config_rom_map),
     OHCI1394_MAP1(OHCI1394_VENDOR_ID, &ohci1394_vendor_id),
     OHCI1394_MAP2(OHCI1394_HC_CONTROL, &ohci1394_hc_control),
@@ -1067,6 +1105,117 @@ static const OHCI1394Register *ohci1394_regs[] = {
 };
 
 /*
+ * Device DMA context registers
+ *
+ */
+
+typedef struct OHCI1394DmaContextRegister {
+    /* Name */
+    const char *name;
+    /* Base address within BAR */
+    unsigned int base;
+    /* Instance shift */
+    unsigned int shift;
+    /* Instance mask */
+    unsigned int mask;
+    /* Offset within OHCI1394State */
+    unsigned int offset;
+} OHCI1394DmaContextRegister;
+
+#define OHCI1394_DMA_REG(_base, _field) {			\
+	.name = #_field,					\
+	.base = _base,						\
+	.shift = 4,						\
+	.mask = 1,						\
+	.offset = offsetof(OHCI1394State, _field),		\
+    }
+
+#define OHCI1394_DMA_ARRAY_REG(_base, _shift, _field) {		\
+	.name = #_field,					\
+	.base = _base,						\
+	.shift = _shift,					\
+	.mask = (ARRAY_SIZE(((OHCI1394State *)NULL)->_field)-1),\
+	.offset = offsetof(OHCI1394State, _field),		\
+    }
+
+/*
+ * Asynchronous DMA context registers
+ *
+ */
+
+static const OHCI1394DmaContextRegister ohci1394_async_request_tx =
+    OHCI1394_DMA_REG(OHCI1394_ASYNC_REQUEST_TX, async_request_tx);
+
+static const OHCI1394DmaContextRegister ohci1394_async_response_tx =
+    OHCI1394_DMA_REG(OHCI1394_ASYNC_RESPONSE_TX, async_response_tx);
+
+static const OHCI1394DmaContextRegister ohci1394_async_request_rx =
+    OHCI1394_DMA_REG(OHCI1394_ASYNC_REQUEST_RX, async_request_rx);
+
+static const OHCI1394DmaContextRegister ohci1394_async_response_rx =
+    OHCI1394_DMA_REG(OHCI1394_ASYNC_RESPONSE_RX, async_response_rx);
+
+/*
+ * Isochronous transmit DMA context registers
+ *
+ */
+
+static const OHCI1394DmaContextRegister ohci1394_isoch_tx =
+    OHCI1394_DMA_ARRAY_REG(OHCI1394_ISOCH_TX, 4, isoch_tx);
+
+/*
+ * Isochronous receive DMA context registers
+ *
+ */
+
+static const OHCI1394DmaContextRegister ohci1394_isoch_rx =
+    OHCI1394_DMA_ARRAY_REG(OHCI1394_ISOCH_RX, 5, isoch_rx);
+
+/*
+ * Device DMA context register map
+ *
+ */
+
+#define OHCI1394_DMA_REG_INDEX(_bar_offset)			\
+    (((_bar_offset) - OHCI1394_DMA_CONTEXT) >> 4)
+
+#define OHCI1394_DMA_MAP1(_bar_offset, _register)		\
+    [OHCI1394_DMA_REG_INDEX(_bar_offset) + 0] = _register
+
+#define OHCI1394_DMA_MAP2(_bar_offset, _register)		\
+    OHCI1394_DMA_MAP1(((_bar_offset) + 0x000), _register),	\
+    OHCI1394_DMA_MAP1(((_bar_offset) + 0x010), _register)
+
+#define OHCI1394_DMA_MAP4(_bar_offset, _register)		\
+    OHCI1394_DMA_MAP2(((_bar_offset) + 0x000), _register),	\
+    OHCI1394_DMA_MAP2(((_bar_offset) + 0x020), _register)
+
+#define OHCI1394_DMA_MAP8(_bar_offset, _register)		\
+    OHCI1394_DMA_MAP4(((_bar_offset) + 0x000), _register),	\
+    OHCI1394_DMA_MAP4(((_bar_offset) + 0x040), _register)
+
+#define OHCI1394_DMA_MAP16(_bar_offset, _register)		\
+    OHCI1394_DMA_MAP8(((_bar_offset) + 0x000), _register),	\
+    OHCI1394_DMA_MAP8(((_bar_offset) + 0x080), _register)
+
+#define OHCI1394_DMA_MAP32(_bar_offset, _register)		\
+    OHCI1394_DMA_MAP16(((_bar_offset) + 0x000), _register),	\
+    OHCI1394_DMA_MAP16(((_bar_offset) + 0x100), _register)
+
+#define OHCI1394_DMA_MAP64(_bar_offset, _register)		\
+    OHCI1394_DMA_MAP32(((_bar_offset) + 0x000), _register),	\
+    OHCI1394_DMA_MAP32(((_bar_offset) + 0x200), _register)
+
+static const OHCI1394DmaContextRegister *ohci1394_dma_regs[] = {
+    OHCI1394_DMA_MAP1(OHCI1394_ASYNC_REQUEST_TX, &ohci1394_async_request_tx),
+    OHCI1394_DMA_MAP1(OHCI1394_ASYNC_RESPONSE_TX, &ohci1394_async_response_tx),
+    OHCI1394_DMA_MAP1(OHCI1394_ASYNC_REQUEST_RX, &ohci1394_async_request_rx),
+    OHCI1394_DMA_MAP1(OHCI1394_ASYNC_RESPONSE_RX, &ohci1394_async_response_rx),
+    OHCI1394_DMA_MAP32(OHCI1394_ISOCH_TX, &ohci1394_isoch_tx),
+    OHCI1394_DMA_MAP64(OHCI1394_ISOCH_RX, &ohci1394_isoch_rx),
+};
+
+/*
  * MMIO operations
  *
  */
@@ -1075,25 +1224,42 @@ static void
 ohci1394_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
 {
     OHCI1394State *s = opaque;
-    unsigned int offset = (addr & OHCI1394_BAR_MASK);
-    unsigned int index = OHCI1394_REG_INDEX(offset);
-    unsigned int r_offset;
+    unsigned int bar_offset = (addr & OHCI1394_BAR_MASK);
+    unsigned int index;
+    unsigned int offset;
+    unsigned int instance;
     const OHCI1394Register *r;
+    const OHCI1394DmaContextRegister *cr;
 
-    if ((index < ARRAY_SIZE(ohci1394_regs)) && (r = ohci1394_regs[index])) {
-	r_offset = (offset - r->base);
-	if (r->op->write) {
-	    DBG("0x%03x <= 0x%08"PRIx64" %s.%x\n",
-		offset, val, r->name, r_offset);
-	    r->op->write(s, r, r_offset, val);
-	    if ( r->notify )
-		r->notify(s);
+    if (bar_offset < OHCI1394_DMA_CONTEXT) {
+	index = OHCI1394_REG_INDEX(bar_offset);
+	if ((index < ARRAY_SIZE(ohci1394_regs)) && (r = ohci1394_regs[index])) {
+	    offset = (bar_offset - r->base);
+	    if (r->op->write) {
+		DBG("0x%03x <= 0x%08"PRIx64" %s.%x\n",
+		    bar_offset, val, r->name, offset);
+		r->op->write(s, r, offset, val);
+		if ( r->notify )
+		    r->notify(s);
+	    } else {
+		DBG("0x%03x <= 0x%08"PRIx64" %s.%x READ-ONLY\n",
+		    bar_offset, val, r->name, offset);
+	    }
 	} else {
-	    DBG("0x%03x <= 0x%08"PRIx64" %s.%x READ-ONLY\n",
-		offset, val, r->name, r_offset);
+	    DBG("0x%03x <= 0x%08"PRIx64" UNKNOWN\n", offset, val);
 	}
     } else {
-	DBG("0x%03x <= 0x%08"PRIx64" UNKNOWN\n", offset, val);
+	index = OHCI1394_DMA_REG_INDEX(bar_offset);
+	if ((index < ARRAY_SIZE(ohci1394_dma_regs)) &&
+	    (cr = ohci1394_dma_regs[index])) {
+	    offset = (bar_offset - cr->base);
+	    instance = ((offset >> cr->shift) & cr->mask);
+	    offset &= ~(-1UL << cr->shift);
+	    DBG("0x%03x <= 0x%08"PRIx64" %s[%x].%x\n",
+		bar_offset, val, cr->name, instance, offset);
+	} else {
+	    DBG("0x%03x <= 0x%08"PRIx64" DMA UNKNOWN\n", offset, val);
+	}
     }
 }
 
@@ -1101,19 +1267,41 @@ static uint64_t
 ohci1394_mmio_read(void *opaque, hwaddr addr, unsigned int size)
 {
     OHCI1394State *s = opaque;
-    unsigned int offset = (addr & OHCI1394_BAR_MASK);
-    unsigned int index = OHCI1394_REG_INDEX(offset);
-    unsigned int r_offset;
+    unsigned int bar_offset = (addr & OHCI1394_BAR_MASK);
+    unsigned int index;
+    unsigned int offset;
+    unsigned int instance;
     const OHCI1394Register *r;
+    const OHCI1394DmaContextRegister *cr;
     uint32_t val;
 
-    if ((index < ARRAY_SIZE(ohci1394_regs)) && (r = ohci1394_regs[index])) {
-	r_offset = (offset - r->base);
-	val = r->op->read(s, r, r_offset);
-	DBG("0x%03x => 0x%08x %s.%x\n",	offset, val, r->name, r_offset);
+    if (bar_offset < OHCI1394_DMA_CONTEXT) {
+	index = OHCI1394_REG_INDEX(bar_offset);
+	if ((index < ARRAY_SIZE(ohci1394_regs)) && (r = ohci1394_regs[index])) {
+	    offset = (bar_offset - r->base);
+	    val = r->op->read(s, r, offset);
+	    DBG("0x%03x => 0x%08x %s.%x\n", bar_offset, val, r->name, offset);
+	} else {
+	    val = -1U;
+	    DBG("0x%03x => 0x%08x UNKNOWN\n", bar_offset, val);
+	}
     } else {
-	val = -1U;
-	DBG("0x%03x => 0x%08x UNKNOWN\n", offset, val);
+	index = OHCI1394_DMA_REG_INDEX(bar_offset);
+	if ((index < ARRAY_SIZE(ohci1394_dma_regs)) &&
+	    (cr = ohci1394_dma_regs[index])) {
+	    offset = (bar_offset - cr->base);
+	    instance = ((offset >> cr->shift) & cr->mask);
+	    offset &= ~(-1UL << cr->shift);
+	    
+	    //
+	    val = 0;
+
+	    DBG("0x%03x => 0x%08x %s[%x].%x\n",
+		bar_offset, val, cr->name, instance, offset);
+	} else {
+	    val = -1U;
+	    DBG("0x%03x => 0x%08x DMA UNKNOWN\n", offset, val);
+	}
     }
     return val;
 }
@@ -1173,9 +1361,40 @@ ohci1394_reset(DeviceState *d)
     ohci1394_set_link_status(qemu_get_queue(s->nic));
 };
 
-#define VMSTATE_OHCI1394_EVENTMASK(_field, _state)		\
-    VMSTATE_UINT32(_field.event, _state),			\
-    VMSTATE_UINT32(_field.mask, _state)
+static const VMStateDescription vmstate_ohci1394_eventmask = {
+    .name = "ohci1394_eventmask",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (VMStateField[]) {
+	VMSTATE_UINT32(event, OHCI1394EventMask),
+	VMSTATE_UINT32(mask, OHCI1394EventMask),
+	VMSTATE_END_OF_LIST()
+    },
+};
+
+#define VMSTATE_OHCI1394_EVENTMASK(_field, _state)			\
+    VMSTATE_STRUCT(_field, _state, 1, vmstate_ohci1394_eventmask,	\
+		   OHCI1394EventMask)
+
+static const VMStateDescription vmstate_ohci1394_dmacontext = {
+    .name = "ohci1394_dmacontext",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (VMStateField[]) {
+	VMSTATE_UINT32(context_control, OHCI1394DmaContext),
+	VMSTATE_UINT32(command_ptr, OHCI1394DmaContext),
+	VMSTATE_UINT32(context_match, OHCI1394DmaContext),
+	VMSTATE_END_OF_LIST()
+    },
+};
+
+#define VMSTATE_OHCI1394_DMACONTEXT(_field, _state)			\
+    VMSTATE_STRUCT(_field, _state, 1, vmstate_ohci1394_dmacontext,	\
+		   OHCI1394DmaContext)
+
+#define VMSTATE_OHCI1394_DMACONTEXT_ARRAY(_field, _state, _num)		\
+    VMSTATE_STRUCT_ARRAY(_field, _state, _num, 1,			\
+			 vmstate_ohci1394_dmacontext, OHCI1394DmaContext)
 
 static const VMStateDescription vmstate_ohci1394 = {
     .name = "ohci1394",
@@ -1184,15 +1403,20 @@ static const VMStateDescription vmstate_ohci1394 = {
     .fields = (VMStateField[]) {
 	VMSTATE_PCI_DEVICE(pci, OHCI1394State),
 	VMSTATE_MACADDR(conf.macaddr, OHCI1394State),
+	VMSTATE_UINT8(phy_reset, OHCI1394State),
+	VMSTATE_UINT8(phy_link, OHCI1394State),
+	VMSTATE_UINT8(phy_misc, OHCI1394State),
+	VMSTATE_UINT8(phy_select, OHCI1394State),
 	VMSTATE_UINT32(version, OHCI1394State),
 	VMSTATE_UINT32(at_retries, OHCI1394State),
 	VMSTATE_UINT32(csr_data, OHCI1394State),
 	VMSTATE_UINT32(csr_compare_data, OHCI1394State),
 	VMSTATE_UINT32(csr_control, OHCI1394State),
-	VMSTATE_UINT32(config_rom_hdr, OHCI1394State),
-	VMSTATE_UINT32(bus_id, OHCI1394State),
-	VMSTATE_UINT32(bus_options, OHCI1394State),
-	VMSTATE_UINT64(guid, OHCI1394State),
+	VMSTATE_UINT32(config_rom.config_rom_hdr, OHCI1394State),
+	VMSTATE_UINT32(config_rom.bus_id, OHCI1394State),
+	VMSTATE_UINT32(config_rom.bus_options, OHCI1394State),
+	VMSTATE_UINT32(config_rom.guid_hi, OHCI1394State),
+	VMSTATE_UINT32(config_rom.guid_lo, OHCI1394State),
 	VMSTATE_UINT32(config_rom_map, OHCI1394State),
 	VMSTATE_UINT32(config_rom_map_next, OHCI1394State),
 	VMSTATE_UINT32(vendor_id, OHCI1394State),
@@ -1213,11 +1437,16 @@ static const VMStateDescription vmstate_ohci1394 = {
 	VMSTATE_UINT64(asynchronous_request_filter, OHCI1394State),
 	VMSTATE_UINT64(physical_request_filter, OHCI1394State),
 	VMSTATE_UINT32(physical_upper_bound, OHCI1394State),
-	VMSTATE_UINT32_ARRAY(bus_management, OHCI1394State, 4),
-	VMSTATE_UINT8(phy_reset, OHCI1394State),
-	VMSTATE_UINT8(phy_link, OHCI1394State),
-	VMSTATE_UINT8(phy_misc, OHCI1394State),
-	VMSTATE_UINT8(phy_select, OHCI1394State),
+	VMSTATE_OHCI1394_DMACONTEXT(async_request_tx, OHCI1394State),
+	VMSTATE_OHCI1394_DMACONTEXT(async_response_tx, OHCI1394State),
+	VMSTATE_OHCI1394_DMACONTEXT(async_request_rx, OHCI1394State),
+	VMSTATE_OHCI1394_DMACONTEXT(async_response_rx, OHCI1394State),
+	VMSTATE_OHCI1394_DMACONTEXT_ARRAY(isoch_tx, OHCI1394State, 32),
+	VMSTATE_OHCI1394_DMACONTEXT_ARRAY(isoch_rx, OHCI1394State, 32),
+	VMSTATE_UINT32(bus_management.bus_manager_id, OHCI1394State),
+	VMSTATE_UINT32(bus_management.bandwidth_available, OHCI1394State),
+	VMSTATE_UINT32(bus_management.channels_available_hi, OHCI1394State),
+	VMSTATE_UINT32(bus_management.channels_available_lo, OHCI1394State),
 	VMSTATE_END_OF_LIST()
     },
 };
