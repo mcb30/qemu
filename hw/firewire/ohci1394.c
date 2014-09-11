@@ -516,8 +516,10 @@ typedef struct OHCI1394Register {
 } OHCI1394Register;
 
 struct OHCI1394RegisterOp {
+    const char **write_names;
     void (*write) (OHCI1394State *s, const OHCI1394Register *r,
 		   unsigned int offset, uint32_t val);
+    const char **read_names;
     uint32_t (*read) (OHCI1394State *s, const OHCI1394Register *r,
 		      unsigned int offset);
 };
@@ -529,6 +531,8 @@ struct OHCI1394RegisterOp {
 	.op = _op,						\
 	.notify = _notify,					\
     }
+
+#define OHCI1394_REG_NAME(_offset) ((_offset) >> 2)
 
 /*
  * Access to 32-bit portion of (possibly 64-bit) device control register
@@ -571,12 +575,17 @@ ohci1394_reg32_read(OHCI1394State *s, const OHCI1394Register *r,
     return *reg;
 }
 
+static const char *ohci1394_reg32_names[] = { "" };
+
 static const OHCI1394RegisterOp ohci1394_op_reg32 = {
+    .write_names = ohci1394_reg32_names,
     .write = ohci1394_reg32_write,
+    .read_names = ohci1394_reg32_names,
     .read = ohci1394_reg32_read,
 };
 
 static const OHCI1394RegisterOp ohci1394_op_reg32_readonly = {
+    .read_names = ohci1394_reg32_names,
     .read = ohci1394_reg32_read,
 };
 
@@ -601,12 +610,17 @@ ohci1394_hilo_read(OHCI1394State *s, const OHCI1394Register *r,
     return *reg;
 }
 
+static const char *ohci1394_hilo_names[] = { ".hi", ".lo" };
+
 static const OHCI1394RegisterOp ohci1394_op_hilo = {
+    .write_names = ohci1394_hilo_names,
     .write = ohci1394_hilo_write,
+    .read_names = ohci1394_hilo_names,
     .read = ohci1394_hilo_read,
 };
 
 static const OHCI1394RegisterOp ohci1394_op_hilo_readonly = {
+    .read_names = ohci1394_hilo_names,
     .read = ohci1394_hilo_read,
 };
 
@@ -636,8 +650,14 @@ ohci1394_setclear_read(OHCI1394State *s, const OHCI1394Register *r,
     return *reg;
 }
 
+static const char *ohci1394_setclear_write_names[] = { ".set", ".clear" };
+
+static const char *ohci1394_setclear_read_names[] = { "", "" };
+
 static const OHCI1394RegisterOp ohci1394_op_setclear = {
+    .write_names = ohci1394_setclear_write_names,
     .write = ohci1394_setclear_write,
+    .read_names = ohci1394_setclear_read_names,
     .read = ohci1394_setclear_read,
 };
 
@@ -667,8 +687,16 @@ ohci1394_hilo_setclear_read(OHCI1394State *s, const OHCI1394Register *r,
     return *reg;
 }
 
+static const char *ohci1394_hilo_setclear_write_names[] =
+    { ".hi.set", ".hi.clear", ".lo.set", ".lo.clear" };
+
+static const char *ohci1394_hilo_setclear_read_names[] =
+    { ".hi", ".hi", ".lo", ".lo" };
+
 static const OHCI1394RegisterOp ohci1394_op_hilo_setclear = {
+    .write_names = ohci1394_hilo_setclear_write_names,
     .write = ohci1394_hilo_setclear_write,
+    .read_names = ohci1394_hilo_setclear_read_names,
     .read = ohci1394_hilo_setclear_read,
 };
 
@@ -720,8 +748,16 @@ ohci1394_eventmask_read(OHCI1394State *s, const OHCI1394Register *r,
     }
 }
 
+static const char *ohci1394_eventmask_write_names[] =
+    { ".event.set", ".event.clear", ".mask.set", ".mask.clear" };
+
+static const char *ohci1394_eventmask_read_names[] =
+    { ".event", ".event.masked", ".mask", ".mask" };
+
 static const OHCI1394RegisterOp ohci1394_op_eventmask = {
+    .write_names = ohci1394_eventmask_write_names,
     .write = ohci1394_eventmask_write,
+    .read_names = ohci1394_eventmask_read_names,
     .read = ohci1394_eventmask_read,
 };
 
@@ -822,7 +858,9 @@ ohci1394_config_rom_map_write(OHCI1394State *s, const OHCI1394Register *r,
 }
 
 static const OHCI1394RegisterOp ohci1394_op_config_rom_map = {
+    .write_names = ohci1394_reg32_names,
     .write = ohci1394_config_rom_map_write,
+    .read_names = ohci1394_reg32_names,
     .read = ohci1394_reg32_read,
 };
 
@@ -1228,6 +1266,7 @@ ohci1394_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
     unsigned int index;
     unsigned int offset;
     unsigned int instance;
+    unsigned int name;
     const OHCI1394Register *r;
     const OHCI1394DmaContextRegister *cr;
 
@@ -1235,15 +1274,16 @@ ohci1394_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
 	index = OHCI1394_REG_INDEX(bar_offset);
 	if ((index < ARRAY_SIZE(ohci1394_regs)) && (r = ohci1394_regs[index])) {
 	    offset = (bar_offset - r->base);
+	    name = OHCI1394_REG_NAME(offset);
 	    if (r->op->write) {
-		DBG("0x%03x <= 0x%08"PRIx64" %s.%x\n",
-		    bar_offset, val, r->name, offset);
+		DBG("0x%03x <= 0x%08"PRIx64" %s%s\n",
+		    bar_offset, val, r->name, r->op->write_names[name]);
 		r->op->write(s, r, offset, val);
 		if ( r->notify )
 		    r->notify(s);
 	    } else {
-		DBG("0x%03x <= 0x%08"PRIx64" %s.%x READ-ONLY\n",
-		    bar_offset, val, r->name, offset);
+		DBG("0x%03x <= 0x%08"PRIx64" %s%s READ-ONLY\n",
+		    bar_offset, val, r->name, r->op->read_names[name]);
 	    }
 	} else {
 	    DBG("0x%03x <= 0x%08"PRIx64" UNKNOWN\n", offset, val);
@@ -1271,6 +1311,7 @@ ohci1394_mmio_read(void *opaque, hwaddr addr, unsigned int size)
     unsigned int index;
     unsigned int offset;
     unsigned int instance;
+    unsigned int name;
     const OHCI1394Register *r;
     const OHCI1394DmaContextRegister *cr;
     uint32_t val;
@@ -1279,8 +1320,10 @@ ohci1394_mmio_read(void *opaque, hwaddr addr, unsigned int size)
 	index = OHCI1394_REG_INDEX(bar_offset);
 	if ((index < ARRAY_SIZE(ohci1394_regs)) && (r = ohci1394_regs[index])) {
 	    offset = (bar_offset - r->base);
+	    name = OHCI1394_REG_NAME(offset);
 	    val = r->op->read(s, r, offset);
-	    DBG("0x%03x => 0x%08x %s.%x\n", bar_offset, val, r->name, offset);
+	    DBG("0x%03x => 0x%08x %s%s\n",
+		bar_offset, val, r->name, r->op->read_names[name]);
 	} else {
 	    val = -1U;
 	    DBG("0x%03x => 0x%08x UNKNOWN\n", bar_offset, val);
