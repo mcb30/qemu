@@ -171,7 +171,12 @@
 
 #define OHCI1394_PHYSICAL_UPPER_BOUND 0x120
 
-#define OHCI1394_DMA_CONTEXT 0x180
+#define OHCI1394_CONTROL_SIZE 0x180
+
+/*
+ * DMA context register sets
+ *
+ */
 
 #define OHCI1394_ASYNC_REQUEST_TX 0x180
 
@@ -184,6 +189,19 @@
 #define OHCI1394_ISOCH_TX 0x200
 
 #define OHCI1394_ISOCH_RX 0x400
+
+/*
+ * DMA context registers
+ *
+ */
+
+#define OHCI1394_DMA_CONTEXT_CONTROL 0x00
+
+#define OHCI1394_DMA_COMMAND_PTR 0x0c
+
+#define OHCI1394_DMA_CONTEXT_MATCH 0x10
+
+#define OHCI1394_DMA_SIZE 0x20
 
 /*
  * Bus management resource registers
