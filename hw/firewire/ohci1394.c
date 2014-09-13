@@ -27,6 +27,10 @@
 #include "ohci1394_regs.h"
 #include "ohci1394.h"
 
+static void
+ohci1394_map(unsigned int base, unsigned int count, unsigned int set,
+	     unsigned int instance, unsigned int reg, bool readonly);
+
 /*
  * Debugging
  *
@@ -339,44 +343,44 @@ static const OHCI1394PhyRegister *ohci1394_phy_regs[] = {
  */
 
 static void
-ohci1394_reg32_write(OHCI1394State *s, const OHCI1394Register *r,
-		     unsigned int offset, uint32_t val)
+ohci1394_ctrl_reg32_write(OHCI1394State *s, const OHCI1394ControlRegister *r,
+			  unsigned int index, uint32_t val)
 {
-    uint32_t *reg = ohci1394_reg32(s, r);
+    uint32_t *reg = ohci1394_ctrl_reg32(s, r);
     *reg = val;
 }
 
 static uint32_t
-ohci1394_reg32_read(OHCI1394State *s, const OHCI1394Register *r,
-		    unsigned int offset)
+ohci1394_ctrl_reg32_read(OHCI1394State *s, const OHCI1394ControlRegister *r,
+			 unsigned int index)
 {
-    uint32_t *reg = ohci1394_reg32(s, r);
+    uint32_t *reg = ohci1394_ctrl_reg32(s, r);
     return *reg;
 }
 
 static void
-ohci1394_hilo_write(OHCI1394State *s, const OHCI1394Register *r,
-		    unsigned int offset, uint32_t val)
+ohci1394_ctrl_hilo_write(OHCI1394State *s, const OHCI1394ControlRegister *r,
+			 unsigned int index, uint32_t val)
 {
-    uint32_t *reg = ohci1394_reg64(s, r, !offset);
+    uint32_t *reg = ohci1394_ctrl_reg64(s, r, !index);
     *reg = val;
 }
 
 static uint32_t
-ohci1394_hilo_read(OHCI1394State *s, const OHCI1394Register *r,
-		   unsigned int offset)
+ohci1394_ctrl_hilo_read(OHCI1394State *s, const OHCI1394ControlRegister *r,
+			unsigned int index)
 {
-    uint32_t *reg = ohci1394_reg64(s, r, !offset);
+    uint32_t *reg = ohci1394_ctrl_reg64(s, r, !index);
     return *reg;
 }
 
 static void
-ohci1394_setclear_write(OHCI1394State *s, const OHCI1394Register *r,
-			unsigned int offset, uint32_t val)
+ohci1394_ctrl_setclear_write(OHCI1394State *s, const OHCI1394ControlRegister *r,
+			     unsigned int index, uint32_t val)
 {
-    uint32_t *reg = ohci1394_reg32(s, r);
+    uint32_t *reg = ohci1394_ctrl_reg32(s, r);
 
-    if (offset & OHCI1394_OFFSET_CLEAR) {
+    if (index & OHCI1394_INDEX_CLEAR) {
 	*reg &= ~val;
     } else {
 	*reg |= val;
@@ -384,20 +388,21 @@ ohci1394_setclear_write(OHCI1394State *s, const OHCI1394Register *r,
 }
 
 static uint32_t
-ohci1394_setclear_read(OHCI1394State *s, const OHCI1394Register *r,
-		       unsigned int offset)
+ohci1394_ctrl_setclear_read(OHCI1394State *s, const OHCI1394ControlRegister *r,
+			    unsigned int index)
 {
-    uint32_t *reg = ohci1394_reg32(s, r);
+    uint32_t *reg = ohci1394_ctrl_reg32(s, r);
     return *reg;
 }
 
 static void
-ohci1394_hilo_setclear_write(OHCI1394State *s, const OHCI1394Register *r,
-			     unsigned int offset, uint32_t val)
+ohci1394_ctrl_hilo_setclear_write(OHCI1394State *s,
+				  const OHCI1394ControlRegister *r,
+				  unsigned int index, uint32_t val)
 {
-    uint32_t *reg = ohci1394_reg64(s, r, !(offset & ~OHCI1394_OFFSET_CLEAR));
+    uint32_t *reg = ohci1394_ctrl_reg64(s, r, !(index & ~OHCI1394_INDEX_CLEAR));
 
-    if (offset & OHCI1394_OFFSET_CLEAR) {
+    if (index & OHCI1394_INDEX_CLEAR) {
 	*reg &= ~val;
     } else {
 	*reg |= val;
@@ -405,27 +410,29 @@ ohci1394_hilo_setclear_write(OHCI1394State *s, const OHCI1394Register *r,
 }
 
 static uint32_t
-ohci1394_hilo_setclear_read(OHCI1394State *s, const OHCI1394Register *r,
-			    unsigned int offset)
+ohci1394_ctrl_hilo_setclear_read(OHCI1394State *s,
+				 const OHCI1394ControlRegister *r,
+				 unsigned int index)
 {
-    uint32_t *reg = ohci1394_reg64(s, r, !(offset & ~OHCI1394_OFFSET_CLEAR));
+    uint32_t *reg = ohci1394_ctrl_reg64(s, r, !(index & ~OHCI1394_INDEX_CLEAR));
     return *reg;
 }
 
 static void
-ohci1394_eventmask_write(OHCI1394State *s, const OHCI1394Register *r,
-			 unsigned int offset, uint32_t val)
+ohci1394_ctrl_eventmask_write(OHCI1394State *s,
+			      const OHCI1394ControlRegister *r,
+			      unsigned int index, uint32_t val)
 {
-    OHCI1394EventMask *reg = ohci1394_eventmask(s, r);
+    OHCI1394EventMask *reg = ohci1394_ctrl_eventmask(s, r);
 
-    if (offset & OHCI1394_OFFSET_MASK) {
-	if (offset & OHCI1394_OFFSET_CLEAR) {
+    if (index & OHCI1394_INDEX_MASK) {
+	if (index & OHCI1394_INDEX_CLEAR) {
 	    reg->mask &= ~val;
 	} else {
 	    reg->mask |= val;
 	}
     } else {
-	if (offset & OHCI1394_OFFSET_CLEAR) {
+	if (index & OHCI1394_INDEX_CLEAR) {
 	    reg->event &= ~val;
 	} else {
 	    reg->event |= val;
@@ -434,15 +441,16 @@ ohci1394_eventmask_write(OHCI1394State *s, const OHCI1394Register *r,
 }
 
 static uint32_t
-ohci1394_eventmask_read(OHCI1394State *s, const OHCI1394Register *r,
-			unsigned int offset)
+ohci1394_ctrl_eventmask_read(OHCI1394State *s,
+			     const OHCI1394ControlRegister *r,
+			     unsigned int index)
 {
-    OHCI1394EventMask *reg = ohci1394_eventmask(s, r);
+    OHCI1394EventMask *reg = ohci1394_ctrl_eventmask(s, r);
 
-    if (offset & OHCI1394_OFFSET_MASK) {
+    if (index & OHCI1394_INDEX_MASK) {
 	return reg->mask;
     } else {
-	if (offset & OHCI1394_OFFSET_MASKED) {
+	if (index & OHCI1394_INDEX_MASKED) {
 	    return (reg->event & reg->mask);
 	} else {
 	    return reg->event;
@@ -451,98 +459,169 @@ ohci1394_eventmask_read(OHCI1394State *s, const OHCI1394Register *r,
 }
 
 static void
-ohci1394_shadowed_write(OHCI1394State *s, const OHCI1394Register *r,
-			unsigned int offset, uint32_t val)
+ohci1394_ctrl_shadowed_write(OHCI1394State *s, const OHCI1394ControlRegister *r,
+			     unsigned int index, uint32_t val)
 {
-    OHCI1394Shadowed *reg = ohci1394_shadowed(s, r);
+    OHCI1394Shadowed *reg = ohci1394_ctrl_shadowed(s, r);
     reg->shadow = val;
 }
 
 static uint32_t
-ohci1394_shadowed_read(OHCI1394State *s, const OHCI1394Register *r,
-		       unsigned int offset)
+ohci1394_ctrl_shadowed_read(OHCI1394State *s, const OHCI1394ControlRegister *r,
+			    unsigned int index)
 {
-    OHCI1394Shadowed *reg = ohci1394_shadowed(s, r);
+    OHCI1394Shadowed *reg = ohci1394_ctrl_shadowed(s, r);
     return reg->active;
 }
 
-static const char *ohci1394_reg32_names[] =
+static const char *ohci1394_ctrl_reg32_names[] =
     { "" };
 
-static const char *ohci1394_shadowed_names[] =
+static const char *ohci1394_ctrl_shadowed_names[] =
     { "" };
 
-static const char *ohci1394_hilo_names[] =
+static const char *ohci1394_ctrl_hilo_names[] =
     { ".hi", ".lo" };
 
-static const char *ohci1394_setclear_write_names[] =
+static const char *ohci1394_ctrl_setclear_write_names[] =
     { ".set", ".clear" };
 
-static const char *ohci1394_setclear_read_names[] =
+static const char *ohci1394_ctrl_setclear_read_names[] =
     { "", "" };
 
-static const char *ohci1394_hilo_setclear_write_names[] =
+static const char *ohci1394_ctrl_hilo_setclear_write_names[] =
     { ".hi.set", ".hi.clear", ".lo.set", ".lo.clear" };
 
-static const char *ohci1394_hilo_setclear_read_names[] =
+static const char *ohci1394_ctrl_hilo_setclear_read_names[] =
     { ".hi", ".hi", ".lo", ".lo" };
 
-static const char *ohci1394_eventmask_write_names[] =
+static const char *ohci1394_ctrl_eventmask_write_names[] =
     { ".event.set", ".event.clear", ".mask.set", ".mask.clear" };
 
-static const char *ohci1394_eventmask_read_names[] =
+static const char *ohci1394_ctrl_eventmask_read_names[] =
     { ".event", ".event.masked", ".mask", ".mask" };
 
-static const OHCI1394RegisterOp ohci1394_op_reg32 = {
-    .write_names = ohci1394_reg32_names,
-    .write = ohci1394_reg32_write,
-    .read_names = ohci1394_reg32_names,
-    .read = ohci1394_reg32_read,
+static const OHCI1394ControlRegisterOp ohci1394_ctrl_op_reg32 = {
+    .count = 1,
+    .write_names = ohci1394_ctrl_reg32_names,
+    .write = ohci1394_ctrl_reg32_write,
+    .read_names = ohci1394_ctrl_reg32_names,
+    .read = ohci1394_ctrl_reg32_read,
 };
 
-static const OHCI1394RegisterOp ohci1394_op_reg32_readonly = {
-    .read_names = ohci1394_reg32_names,
-    .read = ohci1394_reg32_read,
+static const OHCI1394ControlRegisterOp ohci1394_ctrl_op_reg32_readonly = {
+    .count = 1,
+    .read_names = ohci1394_ctrl_reg32_names,
+    .read = ohci1394_ctrl_reg32_read,
 };
 
-static const OHCI1394RegisterOp ohci1394_op_hilo = {
-    .write_names = ohci1394_hilo_names,
-    .write = ohci1394_hilo_write,
-    .read_names = ohci1394_hilo_names,
-    .read = ohci1394_hilo_read,
+static const OHCI1394ControlRegisterOp ohci1394_ctrl_op_hilo = {
+    .count = 2,
+    .write_names = ohci1394_ctrl_hilo_names,
+    .write = ohci1394_ctrl_hilo_write,
+    .read_names = ohci1394_ctrl_hilo_names,
+    .read = ohci1394_ctrl_hilo_read,
 };
 
-static const OHCI1394RegisterOp ohci1394_op_hilo_readonly = {
-    .read_names = ohci1394_hilo_names,
-    .read = ohci1394_hilo_read,
+static const OHCI1394ControlRegisterOp ohci1394_ctrl_op_setclear = {
+    .count = 2,
+    .write_names = ohci1394_ctrl_setclear_write_names,
+    .write = ohci1394_ctrl_setclear_write,
+    .read_names = ohci1394_ctrl_setclear_read_names,
+    .read = ohci1394_ctrl_setclear_read,
 };
 
-static const OHCI1394RegisterOp ohci1394_op_setclear = {
-    .write_names = ohci1394_setclear_write_names,
-    .write = ohci1394_setclear_write,
-    .read_names = ohci1394_setclear_read_names,
-    .read = ohci1394_setclear_read,
+static const OHCI1394ControlRegisterOp ohci1394_ctrl_op_hilo_setclear = {
+    .count = 4,
+    .write_names = ohci1394_ctrl_hilo_setclear_write_names,
+    .write = ohci1394_ctrl_hilo_setclear_write,
+    .read_names = ohci1394_ctrl_hilo_setclear_read_names,
+    .read = ohci1394_ctrl_hilo_setclear_read,
 };
 
-static const OHCI1394RegisterOp ohci1394_op_hilo_setclear = {
-    .write_names = ohci1394_hilo_setclear_write_names,
-    .write = ohci1394_hilo_setclear_write,
-    .read_names = ohci1394_hilo_setclear_read_names,
-    .read = ohci1394_hilo_setclear_read,
+static const OHCI1394ControlRegisterOp ohci1394_ctrl_op_eventmask = {
+    .count = 4,
+    .write_names = ohci1394_ctrl_eventmask_write_names,
+    .write = ohci1394_ctrl_eventmask_write,
+    .read_names = ohci1394_ctrl_eventmask_read_names,
+    .read = ohci1394_ctrl_eventmask_read,
 };
 
-static const OHCI1394RegisterOp ohci1394_op_eventmask = {
-    .write_names = ohci1394_eventmask_write_names,
-    .write = ohci1394_eventmask_write,
-    .read_names = ohci1394_eventmask_read_names,
-    .read = ohci1394_eventmask_read,
+static const OHCI1394ControlRegisterOp ohci1394_ctrl_op_shadowed = {
+    .count = 1,
+    .write_names = ohci1394_ctrl_shadowed_names,
+    .write = ohci1394_ctrl_shadowed_write,
+    .read_names = ohci1394_ctrl_shadowed_names,
+    .read = ohci1394_ctrl_shadowed_read,
 };
 
-static const OHCI1394RegisterOp ohci1394_op_shadowed = {
-    .write_names = ohci1394_shadowed_names,
-    .write = ohci1394_shadowed_write,
-    .read_names = ohci1394_shadowed_names,
-    .read = ohci1394_shadowed_read,
+/*
+ * DMA context register operations
+ *
+ */
+
+static void
+ohci1394_dma_reg32_write(OHCI1394State *s, OHCI1394DmaContext *c,
+			 const OHCI1394DmaRegister *r, unsigned int index,
+			 uint32_t val)
+{
+    uint32_t *reg = ohci1394_dma_reg32(c, r);
+    *reg = val;
+}
+
+static uint32_t
+ohci1394_dma_reg32_read(OHCI1394State *s, OHCI1394DmaContext *c,
+			const OHCI1394DmaRegister *r, unsigned int index)
+{
+    uint32_t *reg = ohci1394_dma_reg32(c, r);
+    return *reg;
+}
+
+static void
+ohci1394_dma_setclear_write(OHCI1394State *s, OHCI1394DmaContext *c,
+			    const OHCI1394DmaRegister *r, unsigned int index,
+			    uint32_t val)
+{
+    uint32_t *reg = ohci1394_dma_reg32(c, r);
+
+    if (index & OHCI1394_INDEX_CLEAR) {
+	*reg &= ~val;
+    } else {
+	*reg |= val;
+    }
+}
+
+static uint32_t
+ohci1394_dma_setclear_read(OHCI1394State *s, OHCI1394DmaContext *c,
+			   const OHCI1394DmaRegister *r, unsigned int index)
+{
+    uint32_t *reg = ohci1394_dma_reg32(c, r);
+    return *reg;
+}
+
+static const char *ohci1394_dma_reg32_names[] =
+    { "" };
+
+static const char *ohci1394_dma_setclear_write_names[] =
+    { ".set", ".clear" };
+
+static const char *ohci1394_dma_setclear_read_names[] =
+    { "", "" };
+
+static const OHCI1394DmaRegisterOp ohci1394_dma_op_reg32 = {
+    .count = 1,
+    .write_names = ohci1394_dma_reg32_names,
+    .write = ohci1394_dma_reg32_write,
+    .read_names = ohci1394_dma_reg32_names,
+    .read = ohci1394_dma_reg32_read,
+};
+
+static const OHCI1394DmaRegisterOp ohci1394_dma_op_setclear = {
+    .count = 2,
+    .write_names = ohci1394_dma_setclear_write_names,
+    .write = ohci1394_dma_setclear_write,
+    .read_names = ohci1394_dma_setclear_read_names,
+    .read = ohci1394_dma_setclear_read,
 };
 
 /*
@@ -586,11 +665,11 @@ ohci1394_phy_write(OHCI1394State *s, unsigned int addr, uint8_t val)
 	    if (r->notify)
 		r->notify(s);
 	} else {
-	    DBG("P0x%x(%x/%x/%x) <= 0x%02x %s READ-ONLY\n",
+	    DBG("P0x%x(%x/%x/%x) <= 0x%02x %s *** READ-ONLY ***\n",
 		addr, page, port, index, val, r->name);
 	}
     } else {
-	DBG("P0x%x(%x/%x/%x) <= 0x%02x UNKNOWN\n",
+	DBG("P0x%x(%x/%x/%x) <= 0x%02x *** UNKNOWN ***\n",
 	    addr, page, port, index, val);
     }
 }
@@ -611,7 +690,7 @@ ohci1394_phy_read(OHCI1394State *s, unsigned int addr)
 	    addr, page, port, index, val, r->name);
     } else {
 	val = 0;
-	DBG("P0x%x(%x/%x/%x) => 0x%02x UNKNOWN\n",
+	DBG("P0x%x(%x/%x/%x) => 0x%02x *** UNKNOWN ***\n",
 	    addr, page, port, index, val);
     }
     return val;
@@ -638,432 +717,320 @@ ohci1394_phy_control_notify(OHCI1394State *s)
     }
 }
 
-static const OHCI1394Register ohci1394_version =
-    OHCI1394_REG(OHCI1394_VERSION, version, &ohci1394_op_reg32_readonly, NULL);
-
-static const OHCI1394Register ohci1394_at_retries =
-    OHCI1394_REG(OHCI1394_AT_RETRIES, at_retries, &ohci1394_op_reg32, NULL);
-
-static const OHCI1394Register ohci1394_csr_data =
-    OHCI1394_REG(OHCI1394_CSR_DATA, csr_data,
-		 &ohci1394_op_reg32, NULL);
-
-static const OHCI1394Register ohci1394_csr_compare_data =
-    OHCI1394_REG(OHCI1394_CSR_COMPARE_DATA, csr_compare_data,
-		 &ohci1394_op_reg32, NULL);
-
-static const OHCI1394Register ohci1394_csr_control =
-    OHCI1394_REG(OHCI1394_CSR_CONTROL, csr_control,
-		 &ohci1394_op_reg32, ohci1394_csr_control_notify);
-
-static const OHCI1394Register ohci1394_config_rom_hdr =
-    OHCI1394_REG(OHCI1394_CONFIG_ROM_HDR, config_rom.config_rom_hdr,
-		 &ohci1394_op_reg32, NULL);
-
-static const OHCI1394Register ohci1394_bus_id =
-    OHCI1394_REG(OHCI1394_BUS_ID, config_rom.bus_id,
-		 &ohci1394_op_reg32_readonly, NULL);
-
-static const OHCI1394Register ohci1394_bus_options =
-    OHCI1394_REG(OHCI1394_BUS_OPTIONS, config_rom.bus_options,
-		 &ohci1394_op_reg32, NULL);
-
-static const OHCI1394Register ohci1394_guid_hi =
-    OHCI1394_REG(OHCI1394_GUID_HI, config_rom.guid_hi,
-		 &ohci1394_op_reg32_readonly, NULL);
-
-static const OHCI1394Register ohci1394_guid_lo =
-    OHCI1394_REG(OHCI1394_GUID_LO, config_rom.guid_lo,
-		 &ohci1394_op_reg32_readonly, NULL);
-
-static const OHCI1394Register ohci1394_config_rom_map =
-    OHCI1394_REG(OHCI1394_CONFIG_ROM_MAP, config_rom_map,
-		 &ohci1394_op_shadowed, NULL);
-
-static const OHCI1394Register ohci1394_vendor_id =
-    OHCI1394_REG(OHCI1394_VENDOR_ID, vendor_id,
-		 &ohci1394_op_reg32_readonly, NULL);
-
-static const OHCI1394Register ohci1394_hc_control =
-    OHCI1394_REG(OHCI1394_HC_CONTROL, hc_control,
-		 &ohci1394_op_setclear, ohci1394_hc_control_notify);
-
-static const OHCI1394Register ohci1394_self_id_buffer =
-    OHCI1394_REG(OHCI1394_SELF_ID_BUFFER, self_id_buffer,
-		 &ohci1394_op_reg32, NULL);
-
-static const OHCI1394Register ohci1394_self_id_count =
-    OHCI1394_REG(OHCI1394_SELF_ID_COUNT, self_id_count,
-		 &ohci1394_op_reg32_readonly, NULL);
-
-static const OHCI1394Register ohci1394_ir_multi_chan_mask =
-    OHCI1394_REG(OHCI1394_IR_MULTI_CHAN_MASK, ir_multi_chan_mask,
-		 &ohci1394_op_hilo_setclear, NULL);
-
-static const OHCI1394Register ohci1394_intr =
-    OHCI1394_REG(OHCI1394_INTR, intr,
-		 &ohci1394_op_eventmask, ohci1394_set_irq);
-
-static const OHCI1394Register ohci1394_iso_xmit_intr =
-    OHCI1394_REG(OHCI1394_ISO_XMIT_INTR, iso_xmit_intr,
-		 &ohci1394_op_eventmask, ohci1394_set_irq);
-
-static const OHCI1394Register ohci1394_iso_recv_intr =
-    OHCI1394_REG(OHCI1394_ISO_RECV_INTR, iso_recv_intr,
-		 &ohci1394_op_eventmask, ohci1394_set_irq);
-
-static const OHCI1394Register ohci1394_initial_bandwidth_available =
-    OHCI1394_REG(OHCI1394_INITIAL_BANDWIDTH_AVAILABLE,
-		 initial_bandwidth_available,
-		 &ohci1394_op_reg32, NULL);
-
-static const OHCI1394Register ohci1394_initial_channels_available =
-    OHCI1394_REG(OHCI1394_INITIAL_CHANNELS_AVAILABLE,
-		 initial_channels_available,
-		 &ohci1394_op_hilo, NULL);
-
-static const OHCI1394Register ohci1394_fairness_control =
-    OHCI1394_REG(OHCI1394_FAIRNESS_CONTROL, fairness_control,
-		 &ohci1394_op_reg32, NULL);
-
-static const OHCI1394Register ohci1394_link_control =
-    OHCI1394_REG(OHCI1394_LINK_CONTROL, link_control,
-		 &ohci1394_op_setclear, NULL);
-
-static const OHCI1394Register ohci1394_node_id =
-    OHCI1394_REG(OHCI1394_NODE_ID, node_id, &ohci1394_op_reg32, NULL);
-
-static const OHCI1394Register ohci1394_phy_control =
-    OHCI1394_REG(OHCI1394_PHY_CONTROL, phy_control,
-		 &ohci1394_op_reg32, ohci1394_phy_control_notify);
-
-static const OHCI1394Register ohci1394_isochronous_cycle_timer =
-    OHCI1394_REG(OHCI1394_ISOCHRONOUS_CYCLE_TIMER, isochronous_cycle_timer,
-		 &ohci1394_op_reg32, NULL);
-
-static const OHCI1394Register ohci1394_asynchronous_request_filter =
-    OHCI1394_REG(OHCI1394_ASYNCHRONOUS_REQUEST_FILTER,
-		 asynchronous_request_filter,
-		 &ohci1394_op_hilo_setclear, NULL);
-
-static const OHCI1394Register ohci1394_physical_request_filter =
-    OHCI1394_REG(OHCI1394_PHYSICAL_REQUEST_FILTER,
-		 physical_request_filter,
-		 &ohci1394_op_hilo_setclear, NULL);
-
-static const OHCI1394Register ohci1394_physical_upper_bound =
-    OHCI1394_REG(OHCI1394_PHYSICAL_UPPER_BOUND, physical_upper_bound,
-		 &ohci1394_op_reg32, NULL);
-
-static const OHCI1394Register *ohci1394_regs[OHCI1394_REG_COUNT] = {
-    OHCI1394_MAP1(OHCI1394_VERSION, &ohci1394_version),
-    OHCI1394_MAP1(OHCI1394_AT_RETRIES, &ohci1394_at_retries),
-    OHCI1394_MAP1(OHCI1394_CSR_DATA, &ohci1394_csr_data),
-    OHCI1394_MAP1(OHCI1394_CSR_COMPARE_DATA, &ohci1394_csr_compare_data),
-    OHCI1394_MAP1(OHCI1394_CSR_CONTROL, &ohci1394_csr_control),
-    OHCI1394_MAP1(OHCI1394_CONFIG_ROM_HDR, &ohci1394_config_rom_hdr),
-    OHCI1394_MAP1(OHCI1394_BUS_ID, &ohci1394_bus_id),
-    OHCI1394_MAP1(OHCI1394_BUS_OPTIONS, &ohci1394_bus_options),
-    OHCI1394_MAP1(OHCI1394_GUID_HI, &ohci1394_guid_hi),
-    OHCI1394_MAP1(OHCI1394_GUID_LO, &ohci1394_guid_lo),
-    OHCI1394_MAP1(OHCI1394_CONFIG_ROM_MAP, &ohci1394_config_rom_map),
-    OHCI1394_MAP1(OHCI1394_VENDOR_ID, &ohci1394_vendor_id),
-    OHCI1394_MAP2(OHCI1394_HC_CONTROL, &ohci1394_hc_control),
-    OHCI1394_MAP1(OHCI1394_SELF_ID_BUFFER, &ohci1394_self_id_buffer),
-    OHCI1394_MAP1(OHCI1394_SELF_ID_COUNT, &ohci1394_self_id_count),
-    OHCI1394_MAP4(OHCI1394_IR_MULTI_CHAN_MASK, &ohci1394_ir_multi_chan_mask),
-    OHCI1394_MAP4(OHCI1394_INTR, &ohci1394_intr),
-    OHCI1394_MAP4(OHCI1394_ISO_XMIT_INTR, &ohci1394_iso_xmit_intr),
-    OHCI1394_MAP4(OHCI1394_ISO_RECV_INTR, &ohci1394_iso_recv_intr),
-    OHCI1394_MAP1(OHCI1394_INITIAL_BANDWIDTH_AVAILABLE,
-		  &ohci1394_initial_bandwidth_available),
-    OHCI1394_MAP2(OHCI1394_INITIAL_CHANNELS_AVAILABLE,
-		  &ohci1394_initial_channels_available),
-    OHCI1394_MAP1(OHCI1394_FAIRNESS_CONTROL, &ohci1394_fairness_control),
-    OHCI1394_MAP2(OHCI1394_LINK_CONTROL, &ohci1394_link_control),
-    OHCI1394_MAP1(OHCI1394_NODE_ID, &ohci1394_node_id),
-    OHCI1394_MAP1(OHCI1394_PHY_CONTROL, &ohci1394_phy_control),
-    OHCI1394_MAP1(OHCI1394_ISOCHRONOUS_CYCLE_TIMER,
-		  &ohci1394_isochronous_cycle_timer),
-    OHCI1394_MAP4(OHCI1394_ASYNCHRONOUS_REQUEST_FILTER,
-		  &ohci1394_asynchronous_request_filter),
-    OHCI1394_MAP4(OHCI1394_PHYSICAL_REQUEST_FILTER,
-		  &ohci1394_physical_request_filter),
-    OHCI1394_MAP1(OHCI1394_PHYSICAL_UPPER_BOUND,
-		  &ohci1394_physical_upper_bound),
+static const OHCI1394ControlRegister ohci1394_ctrl_registers[] = {
+    OHCI1394_CTRL_REG(VERSION, version, reg32_readonly, NULL),
+    OHCI1394_CTRL_REG(AT_RETRIES, at_retries, reg32, NULL),
+    OHCI1394_CTRL_REG(CSR_DATA, csr_data, reg32, NULL),
+    OHCI1394_CTRL_REG(CSR_COMPARE_DATA, csr_compare_data, reg32, NULL),
+    OHCI1394_CTRL_REG(CSR_CONTROL, csr_control,
+		      reg32, ohci1394_csr_control_notify),
+    OHCI1394_CTRL_REG(CONFIG_ROM_HDR, config_rom.config_rom_hdr, reg32, NULL),
+    OHCI1394_CTRL_REG(BUS_ID, config_rom.bus_id, reg32_readonly, NULL),
+    OHCI1394_CTRL_REG(BUS_OPTIONS, config_rom.bus_options, reg32, NULL),
+    OHCI1394_CTRL_REG(GUID_HI, config_rom.guid_hi, reg32_readonly, NULL),
+    OHCI1394_CTRL_REG(GUID_LO, config_rom.guid_lo, reg32_readonly, NULL),
+    OHCI1394_CTRL_REG(CONFIG_ROM_MAP, config_rom_map, shadowed, NULL),
+    OHCI1394_CTRL_REG(VENDOR_ID, vendor_id, reg32_readonly, NULL),
+    OHCI1394_CTRL_REG(HC_CONTROL, hc_control,
+		      setclear, ohci1394_hc_control_notify),
+    OHCI1394_CTRL_REG(SELF_ID_BUFFER, self_id_buffer, reg32, NULL),
+    OHCI1394_CTRL_REG(SELF_ID_COUNT, self_id_count, reg32_readonly, NULL),
+    OHCI1394_CTRL_REG(IR_MULTI_CHAN_MASK, ir_multi_chan_mask,
+		      hilo_setclear, NULL),
+    OHCI1394_CTRL_REG(INTR, intr, eventmask, ohci1394_set_irq),
+    OHCI1394_CTRL_REG(ISO_XMIT_INTR, iso_xmit_intr,
+		      eventmask, ohci1394_set_irq),
+    OHCI1394_CTRL_REG(ISO_RECV_INTR, iso_recv_intr,
+		      eventmask, ohci1394_set_irq),
+    OHCI1394_CTRL_REG(INITIAL_BANDWIDTH_AVAILABLE, initial_bandwidth_available,
+		      reg32, NULL),
+    OHCI1394_CTRL_REG(INITIAL_CHANNELS_AVAILABLE, initial_channels_available,
+		      hilo, NULL),
+    OHCI1394_CTRL_REG(FAIRNESS_CONTROL, fairness_control, reg32, NULL),
+    OHCI1394_CTRL_REG(LINK_CONTROL, link_control, setclear, NULL),
+    OHCI1394_CTRL_REG(NODE_ID, node_id, reg32, NULL),
+    OHCI1394_CTRL_REG(PHY_CONTROL, phy_control,
+		      reg32, ohci1394_phy_control_notify),
+    OHCI1394_CTRL_REG(ISOCHRONOUS_CYCLE_TIMER, isochronous_cycle_timer,
+		      reg32, NULL),
+    OHCI1394_CTRL_REG(ASYNCHRONOUS_REQUEST_FILTER, asynchronous_request_filter,
+		      hilo_setclear, NULL),
+    OHCI1394_CTRL_REG(PHYSICAL_REQUEST_FILTER, physical_request_filter,
+		      hilo_setclear, NULL),
+    OHCI1394_CTRL_REG(PHYSICAL_UPPER_BOUND, physical_upper_bound, reg32, NULL),
 };
 
 static void
-ohci1394_reg_write(OHCI1394State *s, unsigned int addr, uint32_t val)
+ohci1394_ctrl_write(OHCI1394State *s, OHCI1394RegisterMap map,
+		    unsigned int addr, uint32_t val)
 {
-    const OHCI1394Register *r;
-    unsigned int index;
-    unsigned int offset;
-    unsigned int name;
+    const OHCI1394ControlRegister *r = &ohci1394_ctrl_registers[map.reg];
 
-    index = OHCI1394_REG_INDEX(addr);
-    if ((r = ohci1394_regs[index])) {
-	offset = (addr - r->base);
-	name = OHCI1394_REG_INDEX(offset);
-	if (r->op->write) {
-	    DBG("0x%03x <= 0x%08x %s%s\n",
-		addr, val, r->name, r->op->write_names[name]);
-	    r->op->write(s, r, offset, val);
-	    if (r->notify)
-		r->notify(s);
-	} else {
-	    DBG("0x%03x <= 0x%08x %s%s READ-ONLY\n",
-		addr, val, r->name, r->op->read_names[name]);
-	}
-    } else {
-	DBG("0x%03x <= 0x%08x UNKNOWN\n", addr, val);
-    }
+    DBG("0x%03x <= 0x%08x %s%s\n",
+	addr, val, r->name, r->op->write_names[map.index]);
+    r->op->write(s, r, map.index, val);
+    if (r->notify)
+	r->notify(s);
 }
 
 static uint32_t
-ohci1394_reg_read(OHCI1394State *s, unsigned int addr)
+ohci1394_ctrl_read(OHCI1394State *s, OHCI1394RegisterMap map,
+		   unsigned int addr)
 {
-    const OHCI1394Register *r;
-    unsigned int index;
-    unsigned int offset;
-    unsigned int name;
+    const OHCI1394ControlRegister *r = &ohci1394_ctrl_registers[map.reg];
     uint32_t val;
 
-    index = OHCI1394_REG_INDEX(addr);
-    if ((r = ohci1394_regs[index])) {
-	offset = (addr - r->base);
-	name = OHCI1394_REG_INDEX(offset);
-	val = r->op->read(s, r, offset);
-	DBG("0x%03x => 0x%08x %s%s\n",
-	    addr, val, r->name, r->op->read_names[name]);
-    } else {
-	val = -1U;
-	DBG("0x%03x <= 0x%08x UNKNOWN\n", addr, val);
-    }
+    val = r->op->read(s, r, map.index);
+    DBG("0x%03x => 0x%08x %s%s\n",
+	addr, val,r->name, r->op->read_names[map.index]);
     return val;
 }
 
-/*
- * DMA context register operations
- *
- */
-
 static void
-ohci1394_dma_reg32_write(OHCI1394State *s, OHCI1394DmaContext *c,
-			 const OHCI1394DmaRegister *r, unsigned int offset,
-			 uint32_t val)
+ohci1394_ctrl_map(unsigned int set)
 {
-    uint32_t *reg = ohci1394_dma_reg32(c, r);
-    *reg = val;
-}
+    const OHCI1394ControlRegister *r;
+    unsigned int reg;
 
-static uint32_t
-ohci1394_dma_reg32_read(OHCI1394State *s, OHCI1394DmaContext *c,
-			const OHCI1394DmaRegister *r, unsigned int offset)
-{
-    uint32_t *reg = ohci1394_dma_reg32(c, r);
-    return *reg;
-}
-
-static void
-ohci1394_dma_setclear_write(OHCI1394State *s, OHCI1394DmaContext *c,
-			    const OHCI1394DmaRegister *r, unsigned int offset,
-			    uint32_t val)
-{
-    uint32_t *reg = ohci1394_dma_reg32(c, r);
-
-    if (offset & OHCI1394_OFFSET_CLEAR) {
-	*reg &= ~val;
-    } else {
-	*reg |= val;
+    for (reg = 0; reg < ARRAY_SIZE(ohci1394_ctrl_registers); reg++) {
+	r = &ohci1394_ctrl_registers[reg];
+	ohci1394_map(r->base, r->op->count, set, 0, reg, !r->op->write);
     }
 }
-
-static uint32_t
-ohci1394_dma_setclear_read(OHCI1394State *s, OHCI1394DmaContext *c,
-			   const OHCI1394DmaRegister *r, unsigned int offset)
-{
-    uint32_t *reg = ohci1394_dma_reg32(c, r);
-    return *reg;
-}
-
-static const char *ohci1394_dma_reg32_names[] =
-    { "" };
-
-static const char *ohci1394_dma_setclear_write_names[] =
-    { ".set", ".clear" };
-
-static const char *ohci1394_dma_setclear_read_names[] =
-    { "", "" };
-
-static const OHCI1394DmaRegisterOp ohci1394_dma_op_reg32 = {
-    .write_names = ohci1394_dma_reg32_names,
-    .write = ohci1394_dma_reg32_write,
-    .read_names = ohci1394_dma_reg32_names,
-    .read = ohci1394_dma_reg32_read,
-};
-
-static const OHCI1394DmaRegisterOp ohci1394_dma_op_setclear = {
-    .write_names = ohci1394_dma_setclear_write_names,
-    .write = ohci1394_dma_setclear_write,
-    .read_names = ohci1394_dma_setclear_read_names,
-    .read = ohci1394_dma_setclear_read,
-};
 
 /*
  * DMA context registers
  *
  */
 
-static const OHCI1394DmaRegister ohci1394_dma_context_control =
-    OHCI1394_DMA_REG(OHCI1394_DMA_CONTEXT_CONTROL, context_control,
-		 &ohci1394_dma_op_setclear, NULL);
-
-static const OHCI1394DmaRegister ohci1394_dma_command_ptr =
-    OHCI1394_DMA_REG(OHCI1394_DMA_COMMAND_PTR, command_ptr,
-		     &ohci1394_dma_op_reg32, NULL);
-
-static const OHCI1394DmaRegister ohci1394_dma_context_match =
-    OHCI1394_DMA_REG(OHCI1394_DMA_CONTEXT_MATCH, context_match,
-		     &ohci1394_dma_op_reg32, NULL);
-
-static const OHCI1394DmaRegister *ohci1394_dma_regs[OHCI1394_DMA_REG_COUNT] = {
-    OHCI1394_DMA_MAP2(OHCI1394_DMA_CONTEXT_CONTROL,
-		      &ohci1394_dma_context_control),
-    OHCI1394_DMA_MAP1(OHCI1394_DMA_COMMAND_PTR,
-		      &ohci1394_dma_command_ptr),
-    OHCI1394_DMA_MAP1(OHCI1394_DMA_CONTEXT_MATCH,
-		      &ohci1394_dma_context_match),
+static const OHCI1394DmaRegister ohci1394_dma_registers[] = {
+    OHCI1394_DMA_REG(CONTEXT_CONTROL, context_control, setclear, NULL),
+    OHCI1394_DMA_REG(COMMAND_PTR, command_ptr, reg32, NULL),
 };
 
-static void
-ohci1394_dma_reg_write(OHCI1394State *s, const OHCI1394DmaRegisterSet *rs,
-		       unsigned int instance, unsigned int addr, uint32_t val)
-{
-    OHCI1394DmaContext *c = ohci1394_dma_context(s, rs, instance);
-    const OHCI1394DmaRegister *r;
-    unsigned int offset;
-    unsigned int index;
-    unsigned int name;
+static const OHCI1394DmaRegister ohci1394_isoch_rx_registers[] = {
+    OHCI1394_DMA_REG(CONTEXT_CONTROL, context_control, setclear, NULL),
+    OHCI1394_DMA_REG(COMMAND_PTR, command_ptr, reg32, NULL),
+    OHCI1394_DMA_REG(CONTEXT_MATCH, context_match, reg32, NULL),
+};
 
-    index = OHCI1394_DMA_REG_INDEX(addr & rs->mask);
-    if ((r = ohci1394_dma_regs[index])) {
-	offset = ((addr & rs->mask) - r->base);
-	name = OHCI1394_DMA_REG_INDEX(offset);
-	if (r->op->write) {
-	    DBG("0x%03x <= 0x%08x %s.%d.%s%s\n", addr, val, rs->name, instance,
-		r->name, r->op->write_names[name]);
-	    r->op->write(s, c, r, offset, val);
-	    if (r->notify)
-		r->notify(s, c);
-	} else {
-	    DBG("0x%03x <= 0x%08x %s.%d.%s%s READ-ONLY\n", addr, val, rs->name,
-		instance, r->name, r->op->read_names[name]);
-	}
-    } else {
-	DBG("0x%03x <= 0x%08x %s.%d UNKNOWN\n", addr, val, rs->name, instance);
-    }
+static const char *ohci1394_async_names[] =
+    { "request_tx", "response_tx", "request_rx", "response_rx" };
+
+static void
+ohci1394_async_write(OHCI1394State *s, OHCI1394RegisterMap map,
+		     unsigned int addr, uint32_t val)
+{
+    const OHCI1394DmaRegister *r = &ohci1394_dma_registers[map.reg];
+    OHCI1394DmaContext *c = &s->async.numbered[map.instance];
+
+    DBG("0x%03x <= 0x%08x async.%s.%s%s\n", addr, val,
+	ohci1394_async_names[map.instance], r->name,
+	r->op->write_names[map.index]);
+    r->op->write(s, c, r, map.index, val);
+    if (r->notify)
+	r->notify(s, c);
 }
 
 static uint32_t
-ohci1394_dma_reg_read(OHCI1394State *s, const OHCI1394DmaRegisterSet *rs,
-		      unsigned int instance, unsigned int addr)
+ohci1394_async_read(OHCI1394State *s, OHCI1394RegisterMap map,
+		    unsigned int addr)
 {
-    OHCI1394DmaContext *c = ohci1394_dma_context(s, rs, instance);
-    const OHCI1394DmaRegister *r;
-    unsigned int offset;
-    unsigned int index;
-    unsigned int name;
+    const OHCI1394DmaRegister *r = &ohci1394_dma_registers[map.reg];
+    OHCI1394DmaContext *c = &s->async.numbered[map.instance];
     uint32_t val;
 
-    index = OHCI1394_DMA_REG_INDEX(addr & rs->mask);
-    if ((r = ohci1394_dma_regs[index])) {
-	offset = ((addr & rs->mask) - r->base);
-	name = OHCI1394_DMA_REG_INDEX(offset);
-	val = r->op->read(s, c, r, offset);
-	DBG("0x%03x => 0x%08x %s.%d.%s%s\n", addr, val, rs->name, instance,
-	    r->name, r->op->read_names[name]);
-    } else {
-	val = -1U;
-	DBG("0x%03x => 0x%08x %s.%d UNKNOWN\n", addr, val, rs->name, instance);
-    }
+    val = r->op->read(s, c, r, map.index);
+    DBG("0x%03x => 0x%08x async.%s.%s%s\n", addr, val,
+	ohci1394_async_names[map.instance], r->name,
+	r->op->read_names[map.index]);
     return val;
+}
+
+static void
+ohci1394_async_map(unsigned int set)
+{
+    const OHCI1394DmaRegister *r;
+    OHCI1394State *s;
+    unsigned int instance;
+    unsigned int reg;
+
+    for (instance = 0; instance < ARRAY_SIZE(s->async.numbered); instance++) {
+	for (reg = 0; reg < ARRAY_SIZE(ohci1394_dma_registers); reg++) {
+	    r = &ohci1394_dma_registers[reg];
+	    ohci1394_map((OHCI1394_ASYNC(instance) + r->base), r->op->count,
+			 set, instance, reg, !r->op->write);
+	}
+    }
+}
+
+static void
+ohci1394_isoch_tx_write(OHCI1394State *s, OHCI1394RegisterMap map,
+			unsigned int addr, uint32_t val)
+{
+    const OHCI1394DmaRegister *r = &ohci1394_dma_registers[map.reg];
+    OHCI1394DmaContext *c = &s->isoch_tx[map.instance];
+
+    DBG("0x%03x <= 0x%08x isoch_tx[%02x].%s%s\n",
+	addr, val, map.instance, r->name, r->op->write_names[map.index]);
+    r->op->write(s, c, r, map.index, val);
+    if (r->notify)
+	r->notify(s, c);
+}
+
+static uint32_t
+ohci1394_isoch_tx_read(OHCI1394State *s, OHCI1394RegisterMap map,
+		       unsigned int addr)
+{
+    const OHCI1394DmaRegister *r = &ohci1394_dma_registers[map.reg];
+    OHCI1394DmaContext *c = &s->isoch_tx[map.instance];
+    uint32_t val;
+
+    val = r->op->read(s, c, r, map.index);
+    DBG("0x%03x => 0x%08x isoch_tx[%02x].%s%s\n",
+	addr, val, map.instance, r->name, r->op->read_names[map.index]);
+    return val;
+}
+
+static void
+ohci1394_isoch_tx_map(unsigned int set)
+{
+    const OHCI1394DmaRegister *r;
+    OHCI1394State *s;
+    unsigned int instance;
+    unsigned int reg;
+
+    for (instance = 0; instance < ARRAY_SIZE(s->isoch_tx); instance++) {
+	for (reg = 0; reg < ARRAY_SIZE(ohci1394_dma_registers); reg++) {
+	    r = &ohci1394_dma_registers[reg];
+	    ohci1394_map((OHCI1394_ISOCH_TX(instance) + r->base), r->op->count,
+			 set, instance, reg, !r->op->write);
+	}
+    }
+}
+
+static void
+ohci1394_isoch_rx_write(OHCI1394State *s, OHCI1394RegisterMap map,
+			unsigned int addr, uint32_t val)
+{
+    const OHCI1394DmaRegister *r = &ohci1394_dma_registers[map.reg];
+    OHCI1394DmaContext *c = &s->isoch_rx[map.instance];
+
+    DBG("0x%03x <= 0x%08x isoch_rx[%02x].%s%s\n",
+	addr, val, map.instance, r->name, r->op->write_names[map.index]);
+    r->op->write(s, c, r, map.index, val);
+    if (r->notify)
+	r->notify(s, c);
+}
+
+static uint32_t
+ohci1394_isoch_rx_read(OHCI1394State *s, OHCI1394RegisterMap map,
+		       unsigned int addr)
+{
+    const OHCI1394DmaRegister *r = &ohci1394_dma_registers[map.reg];
+    OHCI1394DmaContext *c = &s->isoch_rx[map.instance];
+    uint32_t val;
+
+    val = r->op->read(s, c, r, map.index);
+    DBG("0x%03x => 0x%08x isoch_rx[%02x].%s%s\n",
+	addr, val, map.instance, r->name, r->op->read_names[map.index]);
+    return val;
+}
+
+static void
+ohci1394_isoch_rx_map(unsigned int set)
+{
+    const OHCI1394DmaRegister *r;
+    OHCI1394State *s;
+    unsigned int instance;
+    unsigned int reg;
+
+    for (instance = 0; instance < ARRAY_SIZE(s->isoch_rx); instance++) {
+	for (reg = 0; reg < ARRAY_SIZE(ohci1394_dma_registers); reg++) {
+	    r = &ohci1394_isoch_rx_registers[reg];
+	    ohci1394_map((OHCI1394_ISOCH_RX(instance) + r->base), r->op->count,
+			 set, instance, reg, !r->op->write);
+	}
+    }
 }
 
 /*
- * DMA context register sets
+ * Register map
  *
  */
 
-static const OHCI1394DmaRegisterSet ohci1394_async_request_tx =
-    OHCI1394_DMA_REGSET(OHCI1394_ASYNC_REQUEST_TX, async_request_tx);
-
-static const OHCI1394DmaRegisterSet ohci1394_async_response_tx =
-    OHCI1394_DMA_REGSET(OHCI1394_ASYNC_RESPONSE_TX, async_response_tx);
-
-static const OHCI1394DmaRegisterSet ohci1394_async_request_rx =
-    OHCI1394_DMA_REGSET(OHCI1394_ASYNC_REQUEST_RX, async_request_rx);
-
-static const OHCI1394DmaRegisterSet ohci1394_async_response_rx =
-    OHCI1394_DMA_REGSET(OHCI1394_ASYNC_RESPONSE_RX, async_response_rx);
-
-static const OHCI1394DmaRegisterSet ohci1394_isoch_tx =
-    OHCI1394_DMA_REGSET_ARRAY(OHCI1394_ISOCH_TX, 4, isoch_tx);
-
-static const OHCI1394DmaRegisterSet ohci1394_isoch_rx =
-    OHCI1394_DMA_REGSET_ARRAY(OHCI1394_ISOCH_RX, 5, isoch_rx);
-
-static const OHCI1394DmaRegisterSet *
-ohci1394_dma_regsets[OHCI1394_DMA_REGSET_COUNT] = {
-    OHCI1394_DMA_MAPSET1(OHCI1394_ASYNC_REQUEST_TX,
-			 &ohci1394_async_request_tx),
-    OHCI1394_DMA_MAPSET1(OHCI1394_ASYNC_RESPONSE_TX,
-			 &ohci1394_async_response_tx),
-    OHCI1394_DMA_MAPSET1(OHCI1394_ASYNC_REQUEST_RX,
-			 &ohci1394_async_request_rx),
-    OHCI1394_DMA_MAPSET1(OHCI1394_ASYNC_RESPONSE_RX,
-			 &ohci1394_async_response_rx),
-    OHCI1394_DMA_MAPSET32(OHCI1394_ISOCH_TX, &ohci1394_isoch_tx),
-    OHCI1394_DMA_MAPSET64(OHCI1394_ISOCH_RX, &ohci1394_isoch_rx),
-};
-
 static void
-ohci1394_dma_regset_write(OHCI1394State *s, unsigned int addr, uint32_t val)
+ohci1394_unknown_write(OHCI1394State *s, OHCI1394RegisterMap map,
+		       unsigned int addr, uint32_t val)
 {
-    const OHCI1394DmaRegisterSet *rs;
-    unsigned int index;
-    unsigned int offset;
-    unsigned int instance;
-
-    index = OHCI1394_DMA_REGSET_INDEX(addr);
-    if ((rs = ohci1394_dma_regsets[index])) {
-	offset = (addr - rs->base);
-	instance = (offset >> rs->shift);
-	ohci1394_dma_reg_write(s, rs, instance, addr, val);
-    } else {
-	DBG("0x%03x <= 0x%08x DMA UNKNOWN\n", addr, val);
-    }
+    DBG("0x%03x <= 0x%08x *** UNKNOWN ***\n", addr, val);
 }
 
 static uint32_t
-ohci1394_dma_regset_read(OHCI1394State *s, unsigned int addr)
+ohci1394_unknown_read(OHCI1394State *s, OHCI1394RegisterMap map,
+		      unsigned int addr)
 {
-    const OHCI1394DmaRegisterSet *rs;
-    unsigned int index;
-    unsigned int offset;
-    unsigned int instance;
-    uint32_t val;
-
-    index = OHCI1394_DMA_REGSET_INDEX(addr);
-    if ((rs = ohci1394_dma_regsets[index])) {
-	offset = (addr - rs->base);
-	instance = (offset >> rs->shift);
-	val = ohci1394_dma_reg_read(s, rs, instance, addr);
-    } else {
-	val = -1U;
-	DBG("0x%03x <= 0x%08x DMA UNKNOWN\n", addr, val);
-    }
+    uint32_t val = 0;
+    DBG("0x%03x => 0x%08x *** UNKNOWN ***\n", addr, val);
     return val;
+}
+
+static const OHCI1394RegisterSet ohci1394_register_sets[] = {
+    {
+	.write = ohci1394_unknown_write,
+	.read = ohci1394_unknown_read,
+    },
+    {
+	.write = ohci1394_ctrl_write,
+	.read = ohci1394_ctrl_read,
+	.map = ohci1394_ctrl_map,
+    },
+    {
+	.write = ohci1394_async_write,
+	.read = ohci1394_async_read,
+	.map = ohci1394_async_map,
+    },
+    {
+	.write = ohci1394_isoch_tx_write,
+	.read = ohci1394_isoch_tx_read,
+	.map = ohci1394_isoch_tx_map,
+    },
+    {
+	.write = ohci1394_isoch_rx_write,
+	.read = ohci1394_isoch_rx_read,
+	.map = ohci1394_isoch_rx_map,
+    },
+};
+
+static OHCI1394RegisterMap ohci1394_register_map[OHCI1394_REG_COUNT];
+
+static void
+ohci1394_map(unsigned int base, unsigned int count, unsigned int set,
+	     unsigned int instance, unsigned int reg, bool readonly) {
+    OHCI1394RegisterMap *map;
+    unsigned int index;
+
+    for (index = 0; index < count; index++) {
+	map = &ohci1394_register_map[OHCI1394_REG_INDEX(base) + index];
+	map->set = set;
+	map->instance = instance;
+	map->reg = reg;
+	map->index = index;
+	map->readonly = readonly;
+    }
+}
+
+static void
+ohci1394_map_all(void)
+{
+    const OHCI1394RegisterSet *rs;
+    unsigned int set;
+
+    for (set = 0; set < ARRAY_SIZE(ohci1394_register_sets); set++) {
+	rs = &ohci1394_register_sets[set];
+	if (rs->map)
+	    rs->map(set);
+    }
 }
 
 /*
@@ -1075,12 +1042,17 @@ static void
 ohci1394_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
 {
     OHCI1394State *s = opaque;
-    unsigned int offset = (addr & OHCI1394_BAR_MASK);
+    OHCI1394RegisterMap map;
+    const OHCI1394RegisterSet *rs;
+    unsigned int index;
 
-    if (offset < OHCI1394_CONTROL_SIZE) {
-	ohci1394_reg_write(s, addr, val);
+    index = OHCI1394_REG_INDEX(addr);
+    map = ohci1394_register_map[index];
+    if (unlikely(map.readonly)) {
+	DBG("0x%03lx <= 0x%08"PRIx64" *** READ-ONLY ***\n", addr, val);
     } else {
-	ohci1394_dma_regset_write(s, addr, val);
+	rs = &ohci1394_register_sets[map.set];
+	rs->write(s, map, addr, val);
     }
 }
 
@@ -1088,13 +1060,14 @@ static uint64_t
 ohci1394_mmio_read(void *opaque, hwaddr addr, unsigned int size)
 {
     OHCI1394State *s = opaque;
-    unsigned int offset = (addr & OHCI1394_BAR_MASK);
+    OHCI1394RegisterMap map;
+    const OHCI1394RegisterSet *rs;
+    unsigned int index;
 
-    if (offset < OHCI1394_CONTROL_SIZE) {
-	return ohci1394_reg_read(s, addr);
-    } else {
-	return ohci1394_dma_regset_read(s, addr);
-    }
+    index = OHCI1394_REG_INDEX(addr);
+    map = ohci1394_register_map[index];
+    rs = &ohci1394_register_sets[map.set];
+    return rs->read(s, map, addr);
 }
 
 static const MemoryRegionOps ohci1394_mmio_ops = {
@@ -1242,10 +1215,10 @@ static const VMStateDescription vmstate_ohci1394 = {
 	VMSTATE_UINT64(asynchronous_request_filter, OHCI1394State),
 	VMSTATE_UINT64(physical_request_filter, OHCI1394State),
 	VMSTATE_UINT32(physical_upper_bound, OHCI1394State),
-	VMSTATE_OHCI1394_DMACONTEXT(async_request_tx, OHCI1394State),
-	VMSTATE_OHCI1394_DMACONTEXT(async_response_tx, OHCI1394State),
-	VMSTATE_OHCI1394_DMACONTEXT(async_request_rx, OHCI1394State),
-	VMSTATE_OHCI1394_DMACONTEXT(async_response_rx, OHCI1394State),
+	VMSTATE_OHCI1394_DMACONTEXT(async.request_tx, OHCI1394State),
+	VMSTATE_OHCI1394_DMACONTEXT(async.response_tx, OHCI1394State),
+	VMSTATE_OHCI1394_DMACONTEXT(async.request_rx, OHCI1394State),
+	VMSTATE_OHCI1394_DMACONTEXT(async.response_rx, OHCI1394State),
 	VMSTATE_OHCI1394_DMACONTEXT_ARRAY(isoch_tx, OHCI1394State, 32),
 	VMSTATE_OHCI1394_DMACONTEXT_ARRAY(isoch_rx, OHCI1394State, 32),
 	VMSTATE_UINT32(bus_management.bus_manager_id, OHCI1394State),
@@ -1267,6 +1240,7 @@ ohci1394_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
 
+    /* Initialise class */
     k->init = pci_ohci1394_init;
     k->exit = pci_ohci1394_uninit;
     k->vendor_id = PCI_VENDOR_ID_QEMU;
@@ -1276,6 +1250,9 @@ ohci1394_class_init(ObjectClass *klass, void *data)
     dc->vmsd = &vmstate_ohci1394;
     dc->props = ohci1394_properties;
     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
+
+    /* Generate register map */
+    ohci1394_map_all();
 }
 
 static const TypeInfo ohci1394_info = {

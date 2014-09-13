@@ -103,10 +103,15 @@ typedef struct OHCI1394State {
     uint64_t asynchronous_request_filter;
     uint64_t physical_request_filter;
     uint32_t physical_upper_bound;
-    OHCI1394DmaContext async_request_tx;
-    OHCI1394DmaContext async_response_tx;
-    OHCI1394DmaContext async_request_rx;
-    OHCI1394DmaContext async_response_rx;
+    union {
+	OHCI1394DmaContext numbered[4];
+	struct {
+	    OHCI1394DmaContext request_tx;
+	    OHCI1394DmaContext response_tx;
+	    OHCI1394DmaContext request_rx;
+	    OHCI1394DmaContext response_rx;
+	};
+    } async;
     OHCI1394DmaContext isoch_tx[32];
     OHCI1394DmaContext isoch_rx[32];
 
@@ -175,9 +180,9 @@ ohci1394_phy_reg(OHCI1394State *s, const OHCI1394PhyRegister *r)
  *
  */
 
-typedef struct OHCI1394RegisterOp OHCI1394RegisterOp;
+typedef struct OHCI1394ControlRegisterOp OHCI1394ControlRegisterOp;
 
-typedef struct OHCI1394Register {
+typedef struct OHCI1394ControlRegister {
     /* Name */
     const char *name;
     /* Base address within BAR */
@@ -185,42 +190,32 @@ typedef struct OHCI1394Register {
     /* Offset within OHCI1394State */
     unsigned int offset;
     /* Register read/write operations */
-    const OHCI1394RegisterOp *op;
+    const OHCI1394ControlRegisterOp *op;
     /* Handle register updates */
     void (*notify) (OHCI1394State *s);
-} OHCI1394Register;
+} OHCI1394ControlRegister;
 
-struct OHCI1394RegisterOp {
+struct OHCI1394ControlRegisterOp {
+    unsigned int count;
     const char **write_names;
-    void (*write) (OHCI1394State *s, const OHCI1394Register *r,
-		   unsigned int offset, uint32_t val);
+    void (*write) (OHCI1394State *s, const OHCI1394ControlRegister *r,
+		   unsigned int index, uint32_t val);
     const char **read_names;
-    uint32_t (*read) (OHCI1394State *s, const OHCI1394Register *r,
-		      unsigned int offset);
+    uint32_t (*read) (OHCI1394State *s, const OHCI1394ControlRegister *r,
+		      unsigned int index);
 };
 
-#define OHCI1394_REG(_base, _field, _op, _notify) {			\
+#define OHCI1394_CTRL_REG(_base, _field, _op, _notify) {		\
 	.name = #_field,						\
-	.base = _base,							\
+	.base = OHCI1394_ ## _base,					\
 	.offset = offsetof(OHCI1394State, _field),			\
-	.op = _op,							\
+	.op = &ohci1394_ctrl_op_ ## _op,				\
 	.notify = _notify,						\
     }
 
-#define OHCI1394_REG_INDEX(_offset) ((_offset) >> 2 )
-
-#define OHCI1394_REG_COUNT OHCI1394_REG_INDEX(OHCI1394_CONTROL_SIZE)
-
-#define OHCI1394_MAP1(_offset, _register)				\
-    [OHCI1394_REG_INDEX(_offset) + 0] = _register
-
-#define OHCI1394_MAP2(_offset, _register)				\
-    OHCI1394_MAP1(((_offset) + 0x0), _register),			\
-    OHCI1394_MAP1(((_offset) + 0x4), _register)
-
-#define OHCI1394_MAP4(_offset, _register)				\
-    OHCI1394_MAP2(((_offset) + 0x0), _register),			\
-    OHCI1394_MAP2(((_offset) + 0x8), _register)
+#define OHCI1394_INDEX_CLEAR 0x1
+#define OHCI1394_INDEX_MASKED 0x1
+#define OHCI1394_INDEX_MASK 0x2
 
 #ifdef HOST_WORDS_BIGENDIAN
 #define OHCI1394_OFFSET_HI32 0
@@ -231,25 +226,26 @@ struct OHCI1394RegisterOp {
 #endif
 
 static inline uint32_t *
-ohci1394_reg32(OHCI1394State *s, const OHCI1394Register *r)
+ohci1394_ctrl_reg32(OHCI1394State *s, const OHCI1394ControlRegister *r)
 {
     return ((uint32_t *)(((uint8_t *)s) + r->offset));
 }
 
 static inline uint32_t *
-ohci1394_reg64(OHCI1394State *s, const OHCI1394Register *r, bool high)
+ohci1394_ctrl_reg64(OHCI1394State *s, const OHCI1394ControlRegister *r,
+		    bool high)
 {
     return ((uint32_t *)(((uint8_t *)s) + r->offset +
 			 (high ? OHCI1394_OFFSET_HI32 : OHCI1394_OFFSET_LO32)));
 }
 
 static inline OHCI1394Shadowed *
-ohci1394_shadowed(OHCI1394State *s, const OHCI1394Register *r) {
+ohci1394_ctrl_shadowed(OHCI1394State *s, const OHCI1394ControlRegister *r) {
     return ((OHCI1394Shadowed *)(((uint8_t *)s) + r->offset));
 }
 
 static inline OHCI1394EventMask *
-ohci1394_eventmask(OHCI1394State *s, const OHCI1394Register *r) {
+ohci1394_ctrl_eventmask(OHCI1394State *s, const OHCI1394ControlRegister *r) {
     return ((OHCI1394EventMask *)(((uint8_t *)s) + r->offset));
 }
 
@@ -274,33 +270,23 @@ typedef struct OHCI1394DmaRegister {
 } OHCI1394DmaRegister;
 
 struct OHCI1394DmaRegisterOp {
+    unsigned int count;
     const char **write_names;
     void (*write) (OHCI1394State *s, OHCI1394DmaContext *c,
-		   const OHCI1394DmaRegister *r, unsigned int offset,
+		   const OHCI1394DmaRegister *r, unsigned int index,
 		   uint32_t val);
     const char **read_names;
     uint32_t (*read) (OHCI1394State *s, OHCI1394DmaContext *c,
-		      const OHCI1394DmaRegister *r, unsigned int offset);
+		      const OHCI1394DmaRegister *r, unsigned int index);
 };
 
 #define OHCI1394_DMA_REG(_base, _field, _op, _notify) {			\
 	.name = #_field,						\
-	.base = _base,							\
+	.base = OHCI1394_DMA_ ## _base,					\
 	.offset = offsetof(OHCI1394DmaContext, _field),			\
-	.op = _op,							\
+	.op = &ohci1394_dma_op_ ## _op,					\
 	.notify = _notify,						\
     }
-
-#define OHCI1394_DMA_REG_INDEX(_offset) ((_offset) >> 2)
-
-#define OHCI1394_DMA_REG_COUNT OHCI1394_DMA_REG_INDEX(OHCI1394_DMA_SIZE)
-
-#define OHCI1394_DMA_MAP1(_offset, _register)				\
-    [OHCI1394_DMA_REG_INDEX(_offset) + 0] = _register
-
-#define OHCI1394_DMA_MAP2(_offset, _register)				\
-    OHCI1394_MAP1(((_offset) + 0x0), _register),			\
-    OHCI1394_MAP1(((_offset) + 0x4), _register)
 
 static inline uint32_t *
 ohci1394_dma_reg32(OHCI1394DmaContext *c, const OHCI1394DmaRegister *r)
@@ -309,78 +295,29 @@ ohci1394_dma_reg32(OHCI1394DmaContext *c, const OHCI1394DmaRegister *r)
 }
 
 /*
- * DMA context register sets
+ * Register map
  *
  */
 
-typedef struct OHCI1394DmaRegisterSet {
-    /* Name */
-    const char *name;
-    /* Base address within BAR */
-    unsigned int base;
-    /* Instance shift */
-    unsigned int shift;
-    /* Address mask */
-    unsigned int mask;
-    /* Offset within OHCI1394State */
-    unsigned int offset;
-} OHCI1394DmaRegisterSet;
+#define OHCI1394_REG_INDEX(_offset) ((_offset) >> 2 )
 
-#define OHCI1394_DMA_REGSET(_base, _field) {				\
-	.name = #_field,						\
-	.base = _base,							\
-	.shift = 4,							\
-	.mask = 0x0f,							\
-	.offset = offsetof(OHCI1394State, _field),			\
-    }
+#define OHCI1394_REG_COUNT OHCI1394_REG_INDEX(OHCI1394_BAR_SIZE)
 
-#define OHCI1394_DMA_REGSET_ARRAY(_base, _shift, _field) {		\
-	.name = #_field,						\
-	.base = _base,							\
-	.shift = _shift,						\
-	.mask = ~(-1U << _shift),					\
-	.offset = offsetof(OHCI1394State, _field),			\
-    }
+typedef struct QEMU_PACKED OHCI1394RegisterMap {
+    uint16_t set : 3;
+    uint16_t instance : 5;
+    uint16_t reg : 5;
+    uint16_t index : 2;
+    uint16_t readonly : 1;
+} OHCI1394RegisterMap;
 
-#define OHCI1394_DMA_REGSET_INDEX(_offset)				\
-    (((_offset) & OHCI1394_BAR_MASK) >> 4)
-
-#define OHCI1394_DMA_REGSET_COUNT					\
-    (OHCI1394_DMA_REGSET_INDEX(OHCI1394_BAR_MASK) + 1)
-
-#define OHCI1394_DMA_MAPSET1(_offset, _register)			\
-    [OHCI1394_DMA_REGSET_INDEX(_offset) + 0] = _register
-
-#define OHCI1394_DMA_MAPSET2(_offset, _register)			\
-    OHCI1394_DMA_MAPSET1(((_offset) + 0x000), _register),		\
-    OHCI1394_DMA_MAPSET1(((_offset) + 0x010), _register)
-
-#define OHCI1394_DMA_MAPSET4(_offset, _register)			\
-    OHCI1394_DMA_MAPSET2(((_offset) + 0x000), _register),		\
-    OHCI1394_DMA_MAPSET2(((_offset) + 0x020), _register)
-
-#define OHCI1394_DMA_MAPSET8(_offset, _register)			\
-    OHCI1394_DMA_MAPSET4(((_offset) + 0x000), _register),		\
-    OHCI1394_DMA_MAPSET4(((_offset) + 0x040), _register)
-
-#define OHCI1394_DMA_MAPSET16(_offset, _register)			\
-    OHCI1394_DMA_MAPSET8(((_offset) + 0x000), _register),		\
-    OHCI1394_DMA_MAPSET8(((_offset) + 0x080), _register)
-
-#define OHCI1394_DMA_MAPSET32(_offset, _register)			\
-    OHCI1394_DMA_MAPSET16(((_offset) + 0x000), _register),		\
-    OHCI1394_DMA_MAPSET16(((_offset) + 0x100), _register)
-
-#define OHCI1394_DMA_MAPSET64(_offset, _register)			\
-    OHCI1394_DMA_MAPSET32(((_offset) + 0x000), _register),		\
-    OHCI1394_DMA_MAPSET32(((_offset) + 0x200), _register)
-
-static inline OHCI1394DmaContext *
-ohci1394_dma_context(OHCI1394State *s, const OHCI1394DmaRegisterSet *rs,
-		     unsigned int instance)
-{
-    return &((OHCI1394DmaContext *)(((uint8_t *)s) + rs->offset))[instance];
-}
+typedef struct OHCI1394RegisterSet {
+    void (*write) (OHCI1394State *s, OHCI1394RegisterMap map,
+		   unsigned int hwaddr, uint32_t val);
+    uint32_t (*read) (OHCI1394State *s, OHCI1394RegisterMap map,
+		      unsigned int hwaddr);
+    void (*map) (unsigned int set);
+} OHCI1394RegisterSet;
 
 #endif /* _OHCI1394_H_ */
 

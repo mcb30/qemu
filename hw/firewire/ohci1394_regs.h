@@ -33,15 +33,6 @@
 #define OHCI1394_PROG_IF 0x10
 
 /*
- * Common offsets used in device registers
- *
- */
-
-#define OHCI1394_OFFSET_CLEAR 0x04
-#define OHCI1394_OFFSET_MASKED 0x04
-#define OHCI1394_OFFSET_MASK 0x08
-
-/*
  * Device registers
  *
  */
@@ -171,24 +162,16 @@
 
 #define OHCI1394_PHYSICAL_UPPER_BOUND 0x120
 
-#define OHCI1394_CONTROL_SIZE 0x180
-
 /*
  * DMA context register sets
  *
  */
 
-#define OHCI1394_ASYNC_REQUEST_TX 0x180
+#define OHCI1394_ASYNC(x) (0x180 + ((x) * 0x20))
 
-#define OHCI1394_ASYNC_RESPONSE_TX 0x1a0
+#define OHCI1394_ISOCH_TX(x) (0x200 + ((x) * 0x10))
 
-#define OHCI1394_ASYNC_REQUEST_RX 0x1c0
-
-#define OHCI1394_ASYNC_RESPONSE_RX 0x1e0
-
-#define OHCI1394_ISOCH_TX 0x200
-
-#define OHCI1394_ISOCH_RX 0x400
+#define OHCI1394_ISOCH_RX(x) (0x400 + ((x) * 0x20))
 
 /*
  * DMA context registers
@@ -200,8 +183,6 @@
 #define OHCI1394_DMA_COMMAND_PTR 0x0c
 
 #define OHCI1394_DMA_CONTEXT_MATCH 0x10
-
-#define OHCI1394_DMA_SIZE 0x20
 
 /*
  * Bus management resource registers
