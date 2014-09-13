@@ -308,7 +308,7 @@ typedef struct QEMU_PACKED OHCI1394RegisterMap {
     uint16_t instance : 5;
     uint16_t reg : 5;
     uint16_t index : 2;
-    uint16_t readonly : 1;
+    uint16_t writable : 1;
 } OHCI1394RegisterMap;
 
 typedef struct OHCI1394RegisterSet {
