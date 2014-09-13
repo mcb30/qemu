@@ -87,8 +87,7 @@ ohci1394_bus_reset(OHCI1394State *s)
 
     /* Update configuration ROM if applicable */
     if (s->hc_control & OHCI1394_HC_CONTROL_BIB_IMAGE_VALID) {
-	s->config_rom_map.active = s->config_rom_map.shadow;
-	config_rom = (s->config_rom_map.active & OHCI1394_CONFIG_ROM_MAP_MASK);
+	config_rom = s->config_rom_map.active = s->config_rom_map.shadow;
 	config_rom_hdr_offset = OHCI1394_CONFIG_ROM_OFFSET(config_rom_hdr);
 	bus_options_offset = OHCI1394_CONFIG_ROM_OFFSET(bus_options);
 	s->config_rom.config_rom_hdr =
@@ -118,7 +117,7 @@ ohci1394_bus_reset(OHCI1394State *s)
 	 (3 << 6)),
 	~self_ids[3],
     };
-    s->node_id |= (OHCI1394_NODE_ID_NODE_NUMBER(1) |
+    s->node_id |= (OHCI1394_NODE_ID_NODE_NUMBER_SET(1) |
 		   OHCI1394_NODE_ID_ROOT |
 		   OHCI1394_NODE_ID_ID_VALID);
     pci_dma_write(&s->pci, s->self_id_buffer, self_ids, sizeof(self_ids));
@@ -176,7 +175,7 @@ ohci1394_hard_reset(OHCI1394State *s)
     memcpy(&guid_lo.bytes[1], &s->conf.macaddr.a[3], 3);
 
     /* Set hard-reset initial values */
-    s->version = OHCI1394_VERSION_1_1;
+    s->version = OHCI1394_VERSION_VERSION_1_1;
     s->config_rom.config_rom_hdr = 0;
     s->config_rom.bus_id = OHCI1394_BUS_ID_1394;
     s->config_rom.bus_options = (OHCI1394_BUS_OPTIONS_MAX_REC_DEFAULT |
@@ -389,7 +388,7 @@ ohci1394_phy_read(OHCI1394State *s, unsigned int addr)
 static void
 ohci1394_csr_control_notify(OHCI1394State *s)
 {
-    unsigned int csr_sel = OHCI1394_CSR_CONTROL_CSR_SEL(s->csr_control);
+    unsigned int csr_sel = OHCI1394_CSR_CONTROL_CSR_SEL_GET(s->csr_control);
     uint32_t *bus_reg = &s->bus_management.numbered[csr_sel];
 
     s->csr_data = atomic_cmpxchg(bus_reg, s->csr_compare_data, s->csr_data);
@@ -408,8 +407,8 @@ ohci1394_hc_control_notify(OHCI1394State *s)
 static void
 ohci1394_phy_control_notify(OHCI1394State *s)
 {
-    unsigned int addr = OHCI1394_PHY_CONTROL_REG_ADDR(s->phy_control);
-    unsigned int val = OHCI1394_PHY_CONTROL_WR_DATA(s->phy_control);
+    unsigned int addr = OHCI1394_PHY_CONTROL_REG_ADDR_GET(s->phy_control);
+    unsigned int val = OHCI1394_PHY_CONTROL_WR_DATA_GET(s->phy_control);
 
     if (s->phy_control & OHCI1394_PHY_CONTROL_WR_REG) {
 	ohci1394_phy_write(s, addr, val);
@@ -420,8 +419,8 @@ ohci1394_phy_control_notify(OHCI1394State *s)
 	s->phy_control &= ~(OHCI1394_PHY_CONTROL_RD_REG |
 			    OHCI1394_PHY_CONTROL_RD_DATA_MASK |
 			    OHCI1394_PHY_CONTROL_RD_ADDR_MASK);
-	s->phy_control |= (OHCI1394_PHY_CONTROL_RD_DATA(val) |
-			   OHCI1394_PHY_CONTROL_RD_ADDR(addr) |
+	s->phy_control |= (OHCI1394_PHY_CONTROL_RD_DATA_SET(val) |
+			   OHCI1394_PHY_CONTROL_RD_ADDR_SET(addr) |
 			   OHCI1394_PHY_CONTROL_RD_DONE);
     }
 }
@@ -432,23 +431,23 @@ ohci1394_phy_control_notify(OHCI1394State *s)
  */
 
 const OHCI1394ControlRegister ohci1394_ctrl_registers[] = {
-    OHCI1394_CTRL_REG(VERSION, version, reg32_readonly, NULL),
+    OHCI1394_CTRL_REG(VERSION, version, reg32, NULL),
     OHCI1394_CTRL_REG(AT_RETRIES, at_retries, reg32, NULL),
     OHCI1394_CTRL_REG(CSR_DATA, csr_data, reg32, NULL),
     OHCI1394_CTRL_REG(CSR_COMPARE_DATA, csr_compare_data, reg32, NULL),
     OHCI1394_CTRL_REG(CSR_CONTROL, csr_control,
 		      reg32, ohci1394_csr_control_notify),
     OHCI1394_CTRL_REG(CONFIG_ROM_HDR, config_rom.config_rom_hdr, reg32, NULL),
-    OHCI1394_CTRL_REG(BUS_ID, config_rom.bus_id, reg32_readonly, NULL),
+    OHCI1394_CTRL_REG(BUS_ID, config_rom.bus_id, reg32, NULL),
     OHCI1394_CTRL_REG(BUS_OPTIONS, config_rom.bus_options, reg32, NULL),
-    OHCI1394_CTRL_REG(GUID_HI, config_rom.guid_hi, reg32_readonly, NULL),
-    OHCI1394_CTRL_REG(GUID_LO, config_rom.guid_lo, reg32_readonly, NULL),
+    OHCI1394_CTRL_REG(GUID_HI, config_rom.guid_hi, reg32, NULL),
+    OHCI1394_CTRL_REG(GUID_LO, config_rom.guid_lo, reg32, NULL),
     OHCI1394_CTRL_REG(CONFIG_ROM_MAP, config_rom_map, shadowed, NULL),
-    OHCI1394_CTRL_REG(VENDOR_ID, vendor_id, reg32_readonly, NULL),
+    OHCI1394_CTRL_REG(VENDOR_ID, vendor_id, reg32, NULL),
     OHCI1394_CTRL_REG(HC_CONTROL, hc_control,
 		      setclear, ohci1394_hc_control_notify),
     OHCI1394_CTRL_REG(SELF_ID_BUFFER, self_id_buffer, reg32, NULL),
-    OHCI1394_CTRL_REG(SELF_ID_COUNT, self_id_count, reg32_readonly, NULL),
+    OHCI1394_CTRL_REG(SELF_ID_COUNT, self_id_count, reg32, NULL),
     OHCI1394_CTRL_REG(IR_MULTI_CHAN_MASK, ir_multi_chan_mask,
 		      hilo_setclear, NULL),
     OHCI1394_CTRL_REG(INTR, intr, eventmask, ohci1394_set_irq),
@@ -662,8 +661,10 @@ static const VMStateDescription vmstate_ohci1394 = {
 	VMSTATE_OHCI1394_DMACONTEXT(async.response_tx, OHCI1394State),
 	VMSTATE_OHCI1394_DMACONTEXT(async.request_rx, OHCI1394State),
 	VMSTATE_OHCI1394_DMACONTEXT(async.response_rx, OHCI1394State),
-	VMSTATE_OHCI1394_DMACONTEXT_ARRAY(isoch_tx, OHCI1394State, 32),
-	VMSTATE_OHCI1394_DMACONTEXT_ARRAY(isoch_rx, OHCI1394State, 32),
+	VMSTATE_OHCI1394_DMACONTEXT_ARRAY(isoch_tx, OHCI1394State,
+					  OHCI1394_ISOCH_TX_CONTEXTS),
+	VMSTATE_OHCI1394_DMACONTEXT_ARRAY(isoch_rx, OHCI1394State,
+					  OHCI1394_ISOCH_RX_CONTEXTS),
 	VMSTATE_UINT32(bus_management.bus_manager_id, OHCI1394State),
 	VMSTATE_UINT32(bus_management.bandwidth_available, OHCI1394State),
 	VMSTATE_UINT32(bus_management.channels_available_hi, OHCI1394State),

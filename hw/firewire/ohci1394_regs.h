@@ -25,6 +25,15 @@
 
 #include "ohci1394.h"
 
+#define OHCI1394_EVENTMASK(_event, _mask)				\
+    ((((uint64_t)(_mask)) << 32) | (_event))
+
+#define OHCI1394_EVENTMASK_EVENT(_eventmask)				\
+    (((_eventmask) >> 0) & 0xffffffffU)
+
+#define OHCI1394_EVENTMASK_MASK(_eventmask)				\
+    (((_eventmask) >> 32) & 0xffffffffU)
+
 typedef struct OHCI1394ControlRegisterOp OHCI1394ControlRegisterOp;
 
 typedef struct OHCI1394ControlRegister {
@@ -32,6 +41,10 @@ typedef struct OHCI1394ControlRegister {
     const char *name;
     /* Base address within BAR */
     unsigned int base;
+    /* Settable bits */
+    uint64_t set;
+    /* Clearable bits */
+    uint64_t clear;
     /* Offset within OHCI1394State */
     unsigned int offset;
     /* Register read/write operations */
@@ -40,9 +53,11 @@ typedef struct OHCI1394ControlRegister {
     void (*notify) (OHCI1394State *s);
 } OHCI1394ControlRegister;
 
-#define OHCI1394_CTRL_REG(_base, _field, _op, _notify) {		\
+#define OHCI1394_CTRL_REG(_name, _field, _op, _notify) {		\
 	.name = #_field,						\
-	.base = OHCI1394_ ## _base,					\
+	.base = OHCI1394_ ## _name,					\
+	.set = OHCI1394_ ## _name ## _SET_MASK,				\
+	.clear = OHCI1394_ ## _name ## _CLR_MASK,			\
 	.offset = offsetof(OHCI1394State, _field),			\
 	.op = &ohci1394_ctrl_op_ ## _op,				\
 	.notify = _notify,						\
@@ -57,6 +72,10 @@ typedef struct OHCI1394DmaRegister {
     const char *name;
     /* Base address within register set */
     unsigned int base;
+    /* Settable bits */
+    uint64_t set;
+    /* Clearable bits */
+    uint64_t clear;
     /* Offset within OHCI1394Dma */
     unsigned int offset;
     /* Register read/write operations */
@@ -65,9 +84,11 @@ typedef struct OHCI1394DmaRegister {
     void (*notify) (OHCI1394State *s, OHCI1394DmaContext *c);
 } OHCI1394DmaRegister;
 
-#define OHCI1394_DMA_REG(_base, _field, _op, _notify) {			\
+#define OHCI1394_DMA_REG(_name, _field, _op, _notify) {			\
 	.name = #_field,						\
-	.base = OHCI1394_DMA_ ## _base,					\
+	.base = OHCI1394_DMA_ ## _name,					\
+	.set = OHCI1394_DMA_ ## _name ## _SET_MASK,			\
+	.clear = OHCI1394_DMA_ ## _name ## _CLR_MASK,			\
 	.offset = offsetof(OHCI1394DmaContext, _field),			\
 	.op = &ohci1394_dma_op_ ## _op,					\
 	.notify = _notify,						\
@@ -76,7 +97,6 @@ typedef struct OHCI1394DmaRegister {
 #define OHCI1394_DMA_REG_END { .op = NULL }
 
 extern const OHCI1394ControlRegisterOp ohci1394_ctrl_op_reg32;
-extern const OHCI1394ControlRegisterOp ohci1394_ctrl_op_reg32_readonly;
 extern const OHCI1394ControlRegisterOp ohci1394_ctrl_op_hilo;
 extern const OHCI1394ControlRegisterOp ohci1394_ctrl_op_setclear;
 extern const OHCI1394ControlRegisterOp ohci1394_ctrl_op_hilo_setclear;
@@ -98,3 +118,11 @@ extern uint32_t
 ohci1394_read(OHCI1394State *s, unsigned int addr);
 
 #endif /* _OHCI1394_REGS_H_ */
+
+/*
+ * Local variables:
+ *  c-indent-level: 4
+ *  c-basic-offset: 4
+ *  tab-width: 8
+ * End:
+ */

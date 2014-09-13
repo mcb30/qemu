@@ -33,6 +33,10 @@
  *
  */
 
+#define OHCI1394_ISOCH_TX_CONTEXTS 8
+
+#define OHCI1394_ISOCH_RX_CONTEXTS 8
+
 #define TYPE_OHCI1394 "ohci1394"
 
 #define OHCI1394(obj) \
@@ -113,8 +117,8 @@ typedef struct OHCI1394State {
 	    OHCI1394DmaContext response_rx;
 	};
     } async;
-    OHCI1394DmaContext isoch_tx[32];
-    OHCI1394DmaContext isoch_rx[32];
+    OHCI1394DmaContext isoch_tx[OHCI1394_ISOCH_TX_CONTEXTS];
+    OHCI1394DmaContext isoch_rx[OHCI1394_ISOCH_RX_CONTEXTS];
 
     /* Bus management resource registers (compare-and-swap access only) */
     union {
