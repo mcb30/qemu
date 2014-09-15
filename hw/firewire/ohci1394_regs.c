@@ -679,13 +679,13 @@ ohci1394_map(unsigned int base, unsigned int count, unsigned int group,
 void
 ohci1394_map_registers(void)
 {
-    const OHCI1394RegisterGroup *rs;
+    const OHCI1394RegisterGroup *rg;
     unsigned int group;
 
     for (group = 0; group < ARRAY_SIZE(ohci1394_register_groups); group++) {
-	rs = ohci1394_register_groups[group];
-	if (rs)
-	    rs->map(group);
+	rg = ohci1394_register_groups[group];
+	if (rg)
+	    rg->map(group);
     }
 }
 
@@ -697,15 +697,15 @@ ohci1394_map_registers(void)
 void
 ohci1394_write(OHCI1394State *s, unsigned int addr, uint32_t val)
 {
-    const OHCI1394RegisterGroup *rs;
+    const OHCI1394RegisterGroup *rg;
     OHCI1394RegisterMap map;
     unsigned int index;
 
     index = OHCI1394_REG_INDEX(addr);
     map = ohci1394_register_map[index];
-    rs = ohci1394_register_groups[map.group];
-    if (likely(rs)) {
-	rs->write(s, map, addr, val);
+    rg = ohci1394_register_groups[map.group];
+    if (likely(rg)) {
+	rg->write(s, map, addr, val);
     } else {
 	DBG("0x%03x <= 0x%08x *** UNKNOWN ***\n", addr, val);
     }
@@ -714,16 +714,16 @@ ohci1394_write(OHCI1394State *s, unsigned int addr, uint32_t val)
 uint32_t
 ohci1394_read(OHCI1394State *s, unsigned int addr)
 {
-    const OHCI1394RegisterGroup *rs;
+    const OHCI1394RegisterGroup *rg;
     OHCI1394RegisterMap map;
     unsigned int index;
     uint32_t val;
 
     index = OHCI1394_REG_INDEX(addr);
     map = ohci1394_register_map[index];
-    rs = ohci1394_register_groups[map.group];
-    if (likely(rs)) {
-	val = rs->read(s, map, addr);
+    rg = ohci1394_register_groups[map.group];
+    if (likely(rg)) {
+	val = rg->read(s, map, addr);
     } else {
 	val = 0;
 	DBG("0x%03x => 0x%08x *** UNKNOWN ***\n", addr, val);

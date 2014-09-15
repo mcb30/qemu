@@ -86,9 +86,9 @@ typedef struct OHCI1394DmaRegister {
 
 #define OHCI1394_DMA_REG(_name, _field, _op, _notify) {			\
 	.name = #_field,						\
-	.base = OHCI1394_DMA_ ## _name,					\
-	.set = OHCI1394_DMA_ ## _name ## _SET_MASK,			\
-	.clear = OHCI1394_DMA_ ## _name ## _CLR_MASK,			\
+	.base = OHCI1394_ ## _name,					\
+	.set = OHCI1394_ ## _name ## _SET_MASK,			\
+	.clear = OHCI1394_ ## _name ## _CLR_MASK,			\
 	.offset = offsetof(OHCI1394DmaContext, _field),			\
 	.op = &ohci1394_dma_op_ ## _op,					\
 	.notify = _notify,						\
