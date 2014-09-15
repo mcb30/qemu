@@ -185,8 +185,9 @@ ohci1394_hard_reset(OHCI1394State *s)
     s->version = OHCI1394_VERSION_VERSION_1_1;
     s->config_rom.config_rom_hdr = 0;
     s->config_rom.bus_id = OHCI1394_BUS_ID_1394;
-    s->config_rom.bus_options = (OHCI1394_BUS_OPTIONS_MAX_REC_DEFAULT |
-				 OHCI1394_BUS_OPTIONS_LINK_SPD_DEFAULT);
+    s->config_rom.bus_options =
+	(OHCI1394_BUS_OPTIONS_MAX_REC_SET(OHCI1394_MAX_REC) |
+	 OHCI1394_BUS_OPTIONS_LINK_SPD_DEFAULT);
     s->config_rom.guid_hi = be32_to_cpu(guid_hi.be32);
     s->config_rom.guid_lo = be32_to_cpu(guid_lo.be32);
     s->config_rom_map.active = 0;
@@ -271,24 +272,33 @@ static size_t
 ohci1394_demangle_header(OHCI1394State *s, const OHCI1394MangledHeader *mangled,
 			 OHCI1394DemangledHeader *demangled, size_t len)
 {
+    unsigned int count = (len / sizeof(uint32_t));
     unsigned int tcode;
     unsigned int i;
 
-    for (i = 0; i < (len/sizeof(uint32_t)); i++)
+    for (i = 0; i < count; i++)
 	demangled->quadlet[i] = cpu_to_be32(le32_to_cpu(mangled->quadlet[i]));
+
     tcode = OHCI1394_TCODE_GET(le16_to_cpu(mangled->control));
     if (tcode == TCODE_LINK_INTERNAL) {
 	demangled->quadlet[0] = demangled->quadlet[1];
 	demangled->quadlet[1] = demangled->quadlet[2];
 	return (2 * sizeof(uint32_t));
     }
+
     demangled->after.first = demangled->before.first;
     demangled->after.source_id = cpu_to_be16(OHCI1394_NODE_ID_GET(s->node_id));
     if (tcode == TCODE_STREAM_DATA) {
-	return sizeof(uint32_t);
-    } else {
-	return len;
+	return (1 * sizeof(uint32_t));
+    };
+
+    if ((s->hc_control & OHCI1394_HC_CONTROL_NO_BYTE_SWAP_DATA) &&
+	((tcode == TCODE_WRITE_QUADLET_REQUEST) ||
+	 (tcode == TCODE_READ_QUADLET_RESPONSE))) {
+	bswap32s(&demangled->quadlet[3]);
     }
+
+    return count;
 }
 
 static void
@@ -349,7 +359,8 @@ ohci1394_dma_run(OHCI1394State *s, OHCI1394DmaContext *c)
 	    DBG("%s 0x%08x[%x/%x] %s 0x%08x+0x%04x\n",
 		ohci1394_dma_context_name(s, c), addr, i, z,
 		ohci1394_dma_insn_name(insn), data_address, req_count);
-	    pci_dma_read(&s->pci, data_address, (s->tx.buf + len), req_count);
+	    pci_dma_read(&s->pci, data_address, (s->tx.buf.bytes + len),
+			 req_count);
 	    len += req_count;
 	    break;
 
@@ -404,7 +415,15 @@ ohci1394_dma_run(OHCI1394State *s, OHCI1394DmaContext *c)
 	}
     }
 
-    ohci1394_transmit(s, &s->tx.header.fw, header_len, s->tx.buf, len);
+    while (len & 0x3)
+	s->tx.buf.bytes[len++] = 0;
+
+    if (!(s->hc_control & OHCI1394_HC_CONTROL_NO_BYTE_SWAP_DATA)) {
+	for (i = 0; i < (len/sizeof(s->tx.buf.quadlets[0])); i++)
+	    bswap32s(&s->tx.buf.quadlets[i]);
+    }
+
+    ohci1394_transmit(s, &s->tx.header.fw, header_len, s->tx.buf.bytes, len);
 }
 
 static void

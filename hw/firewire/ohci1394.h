@@ -37,6 +37,10 @@
 
 #define OHCI1394_ISOCH_RX_CONTEXTS 8
 
+#define OHCI1394_MAX_REC 0xf
+
+#define OHCI1394_MAX_PKT_LEN (1 << (OHCI1394_MAX_REC + 1))
+
 #define TYPE_OHCI1394 "ohci1394"
 
 #define OHCI1394(obj) \
@@ -134,7 +138,10 @@ typedef struct OHCI1394State {
     /* Transmit data buffer */
     struct {
 	OHCI1394DemangledHeader header;
-	uint8_t buf[16384];
+	union {
+	    uint8_t bytes[OHCI1394_MAX_PKT_LEN];
+	    uint32_t quadlets[OHCI1394_MAX_PKT_LEN / 4];
+	} buf;
     } tx;
 
 } OHCI1394State;
