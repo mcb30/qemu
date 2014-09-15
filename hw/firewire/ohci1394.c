@@ -266,43 +266,32 @@ ohci1394_dma_die(OHCI1394State *s, OHCI1394DmaContext *c,
 			    OHCI1394_CONTEXT_CONTROL_EVENT_CODE_MASK);
     c->context_control |= (OHCI1394_CONTEXT_CONTROL_DEAD |
 			   OHCI1394_CONTEXT_CONTROL_EVENT_CODE_SET(event_code));
-}
-
-static size_t
-ohci1394_demangle_header(OHCI1394State *s, const OHCI1394MangledHeader *mangled,
-			 OHCI1394DemangledHeader *demangled, size_t len)
-{
-    unsigned int count = (len / sizeof(uint32_t));
-    unsigned int tcode;
-    unsigned int i;
-
-    for (i = 0; i < count; i++)
-	demangled->quadlet[i] = cpu_to_be32(le32_to_cpu(mangled->quadlet[i]));
-
-    tcode = OHCI1394_TCODE_GET(le16_to_cpu(mangled->control));
-    if (tcode == TCODE_LINK_INTERNAL) {
-	demangled->quadlet[0] = demangled->quadlet[1];
-	demangled->quadlet[1] = demangled->quadlet[2];
-	return (2 * sizeof(uint32_t));
-    }
-
-    demangled->after.first = demangled->before.first;
-    demangled->after.source_id = cpu_to_be16(OHCI1394_NODE_ID_GET(s->node_id));
-    if (tcode == TCODE_STREAM_DATA) {
-	return (1 * sizeof(uint32_t));
-    };
-
-    if ((s->hc_control & OHCI1394_HC_CONTROL_NO_BYTE_SWAP_DATA) &&
-	((tcode == TCODE_WRITE_QUADLET_REQUEST) ||
-	 (tcode == TCODE_READ_QUADLET_RESPONSE))) {
-	bswap32s(&demangled->quadlet[3]);
-    }
-
-    return count;
+    c->command_ptr &= ~OHCI1394_COMMAND_PTR_Z_MASK;
+    s->intr.event |= OHCI1394_INTR_UNRECOVERABLE_ERROR;
+    ohci1394_set_irq(s);
 }
 
 static void
-ohci1394_transmit(OHCI1394State *s, FireWireHeader *header, size_t header_len,
+ohci1394_dma_wake(OHCI1394State *s, OHCI1394DmaContext *c)
+{
+    uint32_t addr = OHCI1394_COMMAND_PTR_DESCRIPTOR_ADDRESS_GET(c->command_ptr);
+    OHCI1394DmaProgram program;
+    OHCI1394DmaProgram *p = &program;
+    uint32_t branch_address;
+
+    pci_dma_read(&s->pci, addr, &program, sizeof(program));
+    branch_address = le32_to_cpu(p->common.branch_address);
+    DBG("%s 0x%08x[-/-] wake 0x%08x[%x]\n",
+	ohci1394_dma_context_name(s, c), addr,
+	OHCI1394_COMMAND_PTR_DESCRIPTOR_ADDRESS_GET(branch_address),
+	OHCI1394_COMMAND_PTR_Z_GET(branch_address));
+    if (branch_address & OHCI1394_COMMAND_PTR_Z_MASK)
+	c->command_ptr = branch_address;
+}
+
+//
+static void
+firewire_transmit(OHCI1394State *s, FireWireHeader *header, size_t header_len,
 		  void *data, size_t len)
 {
     unsigned int i;
@@ -315,8 +304,47 @@ ohci1394_transmit(OHCI1394State *s, FireWireHeader *header, size_t header_len,
 	    bytes[i + 2], bytes[i + 3]);
 }
 
+static size_t
+ohci1394_demangle_header(OHCI1394State *s, const OHCI1394MangledHeader *mangled,
+			 OHCI1394DemangledHeader *demangled, size_t len)
+{
+    unsigned int count = (len / sizeof(uint32_t));
+    unsigned int tcode;
+    unsigned int i;
+
+    /* Convert to big-endian */
+    for (i = 0; i < count; i++)
+	demangled->quadlet[i] = cpu_to_be32(le32_to_cpu(mangled->quadlet[i]));
+
+    /* Handle PHY packets */
+    tcode = OHCI1394_TCODE_GET(le16_to_cpu(mangled->control));
+    if (tcode == TCODE_LINK_INTERNAL) {
+	demangled->quadlet[0] = demangled->quadlet[1];
+	demangled->quadlet[1] = demangled->quadlet[2];
+	return (2 * sizeof(uint32_t));
+    }
+
+    /* Demangle destination ID / source ID / data length fields */
+    demangled->after.first = demangled->before.first;
+    demangled->after.source_id = cpu_to_be16(OHCI1394_NODE_ID_GET(s->node_id));
+
+    /* Handle stream packets */
+    if (tcode == TCODE_STREAM_DATA) {
+	return (1 * sizeof(uint32_t));
+    };
+
+    /* Unswap quadlet data field if applicable */
+    if ((s->hc_control & OHCI1394_HC_CONTROL_NO_BYTE_SWAP_DATA) &&
+	((tcode == TCODE_WRITE_QUADLET_REQUEST) ||
+	 (tcode == TCODE_READ_QUADLET_RESPONSE))) {
+	bswap32s(&demangled->quadlet[3]);
+    }
+
+    return (count * sizeof(uint32_t));
+}
+
 static void
-ohci1394_dma_run(OHCI1394State *s, OHCI1394DmaContext *c)
+ohci1394_dma_transmit(OHCI1394State *s, OHCI1394DmaContext *c)
 {
     uint32_t addr = OHCI1394_COMMAND_PTR_DESCRIPTOR_ADDRESS_GET(c->command_ptr);
     unsigned int z = OHCI1394_COMMAND_PTR_Z_GET(c->command_ptr);
@@ -329,13 +357,21 @@ ohci1394_dma_run(OHCI1394State *s, OHCI1394DmaContext *c)
     uint16_t req_count;
     uint16_t store_doublet;
     uint32_t branch_address;
+    uint16_t xfer_status;
     size_t header_len = 0;
     size_t len = 0;
     bool branch;
 
+    /* Do nothing if we have no program to execute */
+    if (!z)
+	return;
+
+    /* Read DMA program */
     c->context_control &= ~OHCI1394_CONTEXT_CONTROL_WAKE;
+    c->context_control |= OHCI1394_CONTEXT_CONTROL_ACTIVE;
     pci_dma_read(&s->pci, addr, program, sizeof(program));
 
+    /* Process DMA program */
     for (i = 0; i < z; i++, addr += sizeof(*p)) {
 	c->command_ptr = OHCI1394_COMMAND_PTR_DESCRIPTOR_ADDRESS_SET(addr);
 	p = &program[i];
@@ -343,6 +379,25 @@ ohci1394_dma_run(OHCI1394State *s, OHCI1394DmaContext *c)
 	insn = le16_to_cpu(p->common.insn);
 	branch = (insn & OHCI1394_INSN_BRANCH_MASK);
 	switch (insn & OHCI1394_INSN_MASK) {
+
+	case OHCI1394_INSN_OUTPUT_LAST_immediate:
+	    branch = true;
+	case OHCI1394_INSN_OUTPUT_MORE_immediate:
+	    req_count = le16_to_cpu(p->output.req_count);
+	    if ((n == NULL) || (req_count > sizeof(*n))) {
+		DBG("%s 0x%08x[%x/%x] %s +0x%04x program overrun\n",
+		    ohci1394_dma_context_name(s, c), addr, i, z,
+		    ohci1394_dma_insn_name(insn), req_count);
+		ohci1394_dma_die(s, c, OHCI1394_EVT_DESCRIPTOR_READ);
+		return;
+	    }
+	    DBG("%s 0x%08x[%x/%x] %s +0x%04x\n",
+		ohci1394_dma_context_name(s, c), addr, i, z,
+		ohci1394_dma_insn_name(insn), req_count);
+	    header_len = ohci1394_demangle_header(s, &n->mangled,
+						  &s->tx.header, req_count);
+	    i++;
+	    break;
 
 	case OHCI1394_INSN_OUTPUT_LAST:
 	    branch = true;
@@ -364,25 +419,6 @@ ohci1394_dma_run(OHCI1394State *s, OHCI1394DmaContext *c)
 	    len += req_count;
 	    break;
 
-	case OHCI1394_INSN_OUTPUT_LAST_immediate:
-	    branch = true;
-	case OHCI1394_INSN_OUTPUT_MORE_immediate:
-	    req_count = le16_to_cpu(p->output.req_count);
-	    if ((n == NULL) || (req_count > sizeof(*n))) {
-		DBG("%s 0x%08x[%x/%x] %s +0x%04x program overrun\n",
-		    ohci1394_dma_context_name(s, c), addr, i, z,
-		    ohci1394_dma_insn_name(insn), req_count);
-		ohci1394_dma_die(s, c, OHCI1394_EVT_DESCRIPTOR_READ);
-		return;
-	    }
-	    DBG("%s 0x%08x[%x/%x] %s +0x%04x\n",
-		ohci1394_dma_context_name(s, c), addr, i, z,
-		ohci1394_dma_insn_name(insn), req_count);
-	    header_len = ohci1394_demangle_header(s, &n->mangled,
-						  &s->tx.header, req_count);
-	    i++;
-	    break;
-
 	case OHCI1394_INSN_STORE_VALUE:
 	    store_doublet = le16_to_cpu(p->store.store_doublet);
 	    data_address = le32_to_cpu(p->store.data_address);
@@ -402,46 +438,51 @@ ohci1394_dma_run(OHCI1394State *s, OHCI1394DmaContext *c)
 	    return;
 	}
 
-	if (branch) {
-	    branch_address = le32_to_cpu(p->common.branch_address);
-	    DBG("%s 0x%08x[%x/%x] %s branch 0x%08x[%x]\n",
-		ohci1394_dma_context_name(s, c), addr, i, z,
-		ohci1394_dma_insn_name(insn),
-		OHCI1394_COMMAND_PTR_DESCRIPTOR_ADDRESS_GET(branch_address),
-		OHCI1394_COMMAND_PTR_Z_GET(branch_address));
-	    if (branch_address & OHCI1394_COMMAND_PTR_Z_MASK)
-		c->command_ptr = branch_address;
+	if (branch)
 	    break;
-	}
     }
 
+    /* Follow final branch */
+    if (branch) {
+	branch_address = le32_to_cpu(p->common.branch_address);
+	DBG("%s 0x%08x[%x/%x] %s branch 0x%08x[%x]\n",
+	    ohci1394_dma_context_name(s, c), addr, i, z,
+	    ohci1394_dma_insn_name(insn),
+	    OHCI1394_COMMAND_PTR_DESCRIPTOR_ADDRESS_GET(branch_address),
+	    OHCI1394_COMMAND_PTR_Z_GET(branch_address));
+	if (branch_address & OHCI1394_COMMAND_PTR_Z_MASK)
+	    c->command_ptr = branch_address;
+    }
+
+    /* Align data length */
     while (len & 0x3)
 	s->tx.buf.bytes[len++] = 0;
 
+    /* Byte-swap data if applicable */
     if (!(s->hc_control & OHCI1394_HC_CONTROL_NO_BYTE_SWAP_DATA)) {
 	for (i = 0; i < (len/sizeof(s->tx.buf.quadlets[0])); i++)
 	    bswap32s(&s->tx.buf.quadlets[i]);
     }
 
-    ohci1394_transmit(s, &s->tx.header.fw, header_len, s->tx.buf.bytes, len);
+    /* Transmit data */
+    firewire_transmit(s, &s->tx.header.fw, header_len, s->tx.buf.bytes, len);
+
+    /* Complete descriptor */
+    if (!(c->command_ptr & OHCI1394_COMMAND_PTR_Z_MASK))
+	c->context_control &= ~OHCI1394_CONTEXT_CONTROL_ACTIVE;
+    xfer_status = OHCI1394_CONTEXT_CONTROL_XFER_STATUS_GET(c->context_control);
+    p->output.xfer_status = cpu_to_le16(xfer_status);
+    p->output.timestamp = 0;
+    if ((insn & OHCI1394_INSN_INTR_MASK) == OHCI1394_INSN_INTR_ALWAYS) {
+	c->eventmask->event |= c->intr_packet;
+	ohci1394_set_irq(s);
+    }
 }
 
 static void
-ohci1394_dma_wake(OHCI1394State *s, OHCI1394DmaContext *c)
+ohci1394_dma_receive(OHCI1394State *s, OHCI1394DmaContext *c)
 {
-    uint32_t addr = OHCI1394_COMMAND_PTR_DESCRIPTOR_ADDRESS_GET(c->command_ptr);
-    OHCI1394DmaProgram program;
-    OHCI1394DmaProgram *p = &program;
-    uint32_t branch_address;
-
-    pci_dma_read(&s->pci, addr, &program, sizeof(program));
-    branch_address = le32_to_cpu(p->common.branch_address);
-    DBG("%s 0x%08x[-/-] wake 0x%08x[%x]\n",
-	ohci1394_dma_context_name(s, c), addr,
-	OHCI1394_COMMAND_PTR_DESCRIPTOR_ADDRESS_GET(branch_address),
-	OHCI1394_COMMAND_PTR_Z_GET(branch_address));
-    if (branch_address & OHCI1394_COMMAND_PTR_Z_MASK)
-	c->command_ptr = branch_address;
+    ohci1394_dma_die(s, c, OHCI1394_EVT_UNKNOWN);
 }
 
 /*
@@ -691,7 +732,7 @@ ohci1394_context_control_notify(OHCI1394State *s, OHCI1394DmaContext *c)
 	    ohci1394_dma_wake(s, c);
 	}
 	while (c->command_ptr & OHCI1394_COMMAND_PTR_Z_MASK)
-	    ohci1394_dma_run(s, c);
+	    c->run(s, c);
     } else {
 	c->context_control &= ~OHCI1394_CONTEXT_CONTROL_DEAD;
     }
@@ -806,6 +847,7 @@ pci_ohci1394_init(PCIDevice *dev)
     OHCI1394State *s = OHCI1394(dev);
     DeviceState *d = DEVICE(dev);
     uint8_t *pci_conf;
+    unsigned int i;
 
     /* Fill in PCI configuration space */
     pci_conf = dev->config;
@@ -814,6 +856,36 @@ pci_ohci1394_init(PCIDevice *dev)
     memory_region_init_io(&s->bar_mem, OBJECT(s), &ohci1394_mmio_ops, s,
 			  "ohci1394", OHCI1394_BAR_SIZE);
     pci_register_bar(dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &s->bar_mem);
+
+    /* Initialise DMA contexts */
+    s->async.request_tx.run = ohci1394_dma_transmit;
+    s->async.request_tx.eventmask = &s->intr;
+    s->async.request_tx.intr_packet = OHCI1394_INTR_REQ_TX_COMPLETE;
+    s->async.request_tx.intr_buffer = OHCI1394_INTR_REQ_TX_COMPLETE;
+    s->async.response_tx.run = ohci1394_dma_transmit;
+    s->async.response_tx.eventmask = &s->intr;
+    s->async.response_tx.intr_packet = OHCI1394_INTR_RESP_TX_COMPLETE;
+    s->async.response_tx.intr_buffer = OHCI1394_INTR_RESP_TX_COMPLETE;
+    s->async.request_rx.run = ohci1394_dma_receive;
+    s->async.request_rx.eventmask = &s->intr;
+    s->async.request_rx.intr_packet = OHCI1394_INTR_RQ_PKT;
+    s->async.request_rx.intr_buffer = OHCI1394_INTR_AR_RQ;
+    s->async.response_rx.run = ohci1394_dma_receive;
+    s->async.response_rx.eventmask = &s->intr;
+    s->async.response_rx.intr_packet = OHCI1394_INTR_RS_PKT;
+    s->async.response_rx.intr_buffer = OHCI1394_INTR_AR_RS;
+    for (i = 0; i < ARRAY_SIZE(s->isoch_tx); i++) {
+	s->isoch_tx[i].run = ohci1394_dma_transmit;
+	s->isoch_tx[i].eventmask = &s->iso_xmit_intr;
+	s->isoch_tx[i].intr_packet = (1 << i);
+	s->isoch_tx[i].intr_buffer = (1 << i);
+    }
+    for (i = 0; i < ARRAY_SIZE(s->isoch_rx); i++) {
+	s->isoch_rx[i].run = ohci1394_dma_receive;
+	s->isoch_rx[i].eventmask = &s->iso_recv_intr;
+	s->isoch_rx[i].intr_packet = (1 << i);
+	s->isoch_rx[i].intr_buffer = (1 << i);
+    }
 
     /* Register network device */
     qemu_macaddr_default_if_unset(&s->conf.macaddr);

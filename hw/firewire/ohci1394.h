@@ -46,6 +46,10 @@
 #define OHCI1394(obj) \
      OBJECT_CHECK(OHCI1394State, (obj), TYPE_OHCI1394)
 
+typedef struct OHCI1394State OHCI1394State;
+
+typedef struct OHCI1394DmaContext OHCI1394DmaContext;
+
 typedef struct OHCI1394Shadowed {
     uint32_t active;
     uint32_t shadow;
@@ -56,13 +60,24 @@ typedef struct OHCI1394EventMask {
     uint32_t mask;
 } OHCI1394EventMask;
 
-typedef struct OHCI1394DmaContext {
+struct OHCI1394DmaContext {
+
+    /* Context registers */
     uint32_t context_control;
     uint32_t command_ptr;
     uint32_t context_match;	/* Isochronous receive contexts only */
-} OHCI1394DmaContext;
 
-typedef struct OHCI1394State {
+    /* DMA engine */
+    void (*run) (OHCI1394State *s, OHCI1394DmaContext *c);
+    /* Interrupt register */
+    OHCI1394EventMask *eventmask;
+    /* Interrupt bit (per-packet) */
+    uint32_t intr_packet;
+    /* Interrupt bit (per-buffer) */
+    uint32_t intr_buffer;
+};
+
+struct OHCI1394State {
     /*< private >*/
     PCIDevice pci;
     /*< public >*/
@@ -144,7 +159,7 @@ typedef struct OHCI1394State {
 	} buf;
     } tx;
 
-} OHCI1394State;
+};
 
 #define OHCI1394_CONFIG_ROM_OFFSET(_field) \
     offsetof(typeof(((OHCI1394State *)NULL)->config_rom), _field)
