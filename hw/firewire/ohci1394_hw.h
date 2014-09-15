@@ -23,6 +23,8 @@
 #ifndef _OHCI1394_HW_H_
 #define _OHCI1394_HW_H_
 
+#include "firewire.h"
+
 /*
  * PCI details
  *
@@ -330,6 +332,8 @@
 	OHCI1394_NODE_ID_BUS_NUMBER_SET(0x3ff)
 #define OHCI1394_NODE_ID_BUS_NUMBER_MASK		\
 	OHCI1394_NODE_ID_BUS_NUMBER_SET(0x3ff)
+#define OHCI1394_NODE_ID_GET(x)				\
+	(((x) >> 0) & 0xffff)
 #define OHCI1394_NODE_ID_CPS				0x08000000U
 #define OHCI1394_NODE_ID_ROOT				0x40000000U
 #define OHCI1394_NODE_ID_ID_VALID			0x80000000U
@@ -504,10 +508,6 @@ typedef struct QEMU_PACKED OHCI1394DmaProgramCommon {
 	uint32_t reserved3;
 } OHCI1394DmaProgramCommon;
 
-typedef struct QEMU_PACKED OHCI1394DmaProgramRaw {
-	uint32_t data[4];
-} OHCI1394DmaProgramRaw;
-
 typedef struct QEMU_PACKED OHCI1394DmaProgramOutput {
 	uint16_t req_count;
 	uint16_t insn;
@@ -551,14 +551,35 @@ typedef struct QEMU_PACKED OHCI1394DmaProgramDualBufferPayload {
 	uint32_t reserved2;
 } OHCI1394DmaProgramDualBufferPayload;
 
+typedef union QEMU_PACKED OHCI1394MangledHeader {
+	uint16_t control;
+	uint32_t quadlet[4];
+} OHCI1394MangledHeader;
+
+typedef union QEMU_PACKED OHCI1394DemangledHeader {
+	FireWireHeader fw;
+	struct QEMU_PACKED {
+		uint16_t garbage;
+		uint16_t control;
+		uint16_t first;
+	} before;
+	struct QEMU_PACKED {
+		uint16_t first;
+		uint16_t control;
+		uint16_t source_id;
+	} after;
+	uint32_t quadlet[4];
+} OHCI1394DemangledHeader;
+
 typedef union QEMU_PACKED OHCI1394DmaProgram {
 	OHCI1394DmaProgramCommon common;
-	OHCI1394DmaProgramRaw raw;
 	OHCI1394DmaProgramOutput output;
 	OHCI1394DmaProgramInput input;
 	OHCI1394DmaProgramStore store;
 	OHCI1394DmaProgramDualBuffer dual_buffer;
 	OHCI1394DmaProgramDualBufferPayload dual_buffer_payload;
+	OHCI1394MangledHeader mangled;
+	uint32_t raw[4];
 } OHCI1394DmaProgram;
 
 #define OHCI1394_INSN_WAIT_MASK				0x0003
@@ -598,6 +619,9 @@ typedef union QEMU_PACKED OHCI1394DmaProgram {
 #define OHCI1394_INSN_STORE_VALUE			\
 	(OHCI1394_INSN_CMD_STORE_VALUE |		\
 	 OHCI1394_INSN_KEY_STORE_VALUE)
+
+#define OHCI1394_TCODE_GET(x)				\
+	(((x) >> 4) & 0xf)
 
 /*
  * Bus management resource registers

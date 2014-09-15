@@ -131,6 +131,12 @@ typedef struct OHCI1394State {
 	};
     } bus_management;
 
+    /* Transmit data buffer */
+    struct {
+	OHCI1394DemangledHeader header;
+	uint8_t buf[16384];
+    } tx;
+
 } OHCI1394State;
 
 #define OHCI1394_CONFIG_ROM_OFFSET(_field) \

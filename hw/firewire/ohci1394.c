@@ -23,8 +23,8 @@
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
 #include "qemu/iov.h"
-#include "ohci1394.h"
 #include "ohci1394_hw.h"
+#include "ohci1394.h"
 #include "ohci1394_regs.h"
 
 /*
@@ -267,20 +267,42 @@ ohci1394_dma_die(OHCI1394State *s, OHCI1394DmaContext *c,
 			   OHCI1394_CONTEXT_CONTROL_EVENT_CODE_SET(event_code));
 }
 
-static void
-ohci1394_dma_transmit_header(OHCI1394State *s, OHCI1394DmaContext *c,
-			     uint32_t *data, size_t len)
+static size_t
+ohci1394_demangle_header(OHCI1394State *s, const OHCI1394MangledHeader *mangled,
+			 OHCI1394DemangledHeader *demangled, size_t len)
 {
+    unsigned int tcode;
     unsigned int i;
 
-    for (i = 0; i < (len/sizeof(data[0])); i++)
-	DBG("*** 0x%08x\n", le32_to_cpu(data[i]));
+    for (i = 0; i < (len/sizeof(uint32_t)); i++)
+	demangled->quadlet[i] = cpu_to_be32(le32_to_cpu(mangled->quadlet[i]));
+    tcode = OHCI1394_TCODE_GET(le16_to_cpu(mangled->control));
+    if (tcode == TCODE_LINK_INTERNAL) {
+	demangled->quadlet[0] = demangled->quadlet[1];
+	demangled->quadlet[1] = demangled->quadlet[2];
+	return (2 * sizeof(uint32_t));
+    }
+    demangled->after.first = demangled->before.first;
+    demangled->after.source_id = cpu_to_be16(OHCI1394_NODE_ID_GET(s->node_id));
+    if (tcode == TCODE_STREAM_DATA) {
+	return sizeof(uint32_t);
+    } else {
+	return len;
+    }
 }
 
 static void
-ohci1394_dma_transmit_data(OHCI1394State *s, OHCI1394DmaContext *c,
-			   uint32_t addr, size_t len)
+ohci1394_transmit(OHCI1394State *s, FireWireHeader *header, size_t header_len,
+		  void *data, size_t len)
 {
+    unsigned int i;
+    uint8_t *bytes = data;
+
+    for (i = 0; i < (header_len/4); i++)
+	DBG("TXH: %08x\n", be32_to_cpu(header->raw[i]));
+    for (i = 0; i < len; i += 4)
+	DBG("TXD: %02x%02x%02x%02x\n", bytes[i + 0], bytes[i + 1],
+	    bytes[i + 2], bytes[i + 3]);
 }
 
 static void
@@ -297,6 +319,8 @@ ohci1394_dma_run(OHCI1394State *s, OHCI1394DmaContext *c)
     uint16_t req_count;
     uint16_t store_doublet;
     uint32_t branch_address;
+    size_t header_len = 0;
+    size_t len = 0;
     bool branch;
 
     c->context_control &= ~OHCI1394_CONTEXT_CONTROL_WAKE;
@@ -309,16 +333,26 @@ ohci1394_dma_run(OHCI1394State *s, OHCI1394DmaContext *c)
 	insn = le16_to_cpu(p->common.insn);
 	branch = (insn & OHCI1394_INSN_BRANCH_MASK);
 	switch (insn & OHCI1394_INSN_MASK) {
+
 	case OHCI1394_INSN_OUTPUT_LAST:
 	    branch = true;
 	case OHCI1394_INSN_OUTPUT_MORE:
 	    req_count = le16_to_cpu(p->output.req_count);
 	    data_address = le32_to_cpu(p->output.data_address);
+	    if ((len + req_count) > sizeof(s->tx.buf)) {
+		DBG("%s 0x%08x[%x/%x] %s 0x%08x+0x%04x data overrun\n",
+		    ohci1394_dma_context_name(s, c), addr, i, z,
+		    ohci1394_dma_insn_name(insn), data_address, req_count);
+		ohci1394_dma_die(s, c, OHCI1394_EVT_DESCRIPTOR_READ);
+		return;
+	    }
 	    DBG("%s 0x%08x[%x/%x] %s 0x%08x+0x%04x\n",
 		ohci1394_dma_context_name(s, c), addr, i, z,
 		ohci1394_dma_insn_name(insn), data_address, req_count);
-	    ohci1394_dma_transmit_data(s, c, data_address, req_count);
+	    pci_dma_read(&s->pci, data_address, (s->tx.buf + len), req_count);
+	    len += req_count;
 	    break;
+
 	case OHCI1394_INSN_OUTPUT_LAST_immediate:
 	    branch = true;
 	case OHCI1394_INSN_OUTPUT_MORE_immediate:
@@ -333,9 +367,11 @@ ohci1394_dma_run(OHCI1394State *s, OHCI1394DmaContext *c)
 	    DBG("%s 0x%08x[%x/%x] %s +0x%04x\n",
 		ohci1394_dma_context_name(s, c), addr, i, z,
 		ohci1394_dma_insn_name(insn), req_count);
-	    ohci1394_dma_transmit_header(s, c, n->raw.data, req_count);
+	    header_len = ohci1394_demangle_header(s, &n->mangled,
+						  &s->tx.header, req_count);
 	    i++;
 	    break;
+
 	case OHCI1394_INSN_STORE_VALUE:
 	    store_doublet = le16_to_cpu(p->store.store_doublet);
 	    data_address = le32_to_cpu(p->store.data_address);
@@ -344,15 +380,17 @@ ohci1394_dma_run(OHCI1394State *s, OHCI1394DmaContext *c)
 		ohci1394_dma_insn_name(insn), data_address, store_doublet);
 	    stw_le_pci_dma(&s->pci, data_address, store_doublet);
 	    break;
+
 	default:
 	    DBG("%s 0x%08x[%x/%x] %s %08x:%08x:%08x:%08x\n",
 		ohci1394_dma_context_name(s, c), addr, i, z,
-		ohci1394_dma_insn_name(insn), le32_to_cpu(p->raw.data[0]),
-		le32_to_cpu(p->raw.data[1]), le32_to_cpu(p->raw.data[2]),
-		le32_to_cpu(p->raw.data[3]));
+		ohci1394_dma_insn_name(insn), le32_to_cpu(p->raw[0]),
+		le32_to_cpu(p->raw[1]), le32_to_cpu(p->raw[2]),
+		le32_to_cpu(p->raw[3]));
 	    ohci1394_dma_die(s, c, OHCI1394_EVT_DESCRIPTOR_READ);
 	    return;
 	}
+
 	if (branch) {
 	    branch_address = le32_to_cpu(p->common.branch_address);
 	    DBG("%s 0x%08x[%x/%x] %s branch 0x%08x[%x]\n",
@@ -365,6 +403,8 @@ ohci1394_dma_run(OHCI1394State *s, OHCI1394DmaContext *c)
 	    break;
 	}
     }
+
+    ohci1394_transmit(s, &s->tx.header.fw, header_len, s->tx.buf, len);
 }
 
 static void

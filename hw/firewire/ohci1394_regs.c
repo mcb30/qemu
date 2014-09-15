@@ -20,8 +20,8 @@
  *
  */
 
-#include "ohci1394.h"
 #include "ohci1394_hw.h"
+#include "ohci1394.h"
 #include "ohci1394_regs.h"
 
 #define OHCI1394_REG_INDEX(_offset) ((_offset) >> 2 )
