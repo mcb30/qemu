@@ -22,7 +22,6 @@
 
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
-#include "qemu/iov.h"
 #include "ohci1394_hw.h"
 #include "ohci1394.h"
 #include "ohci1394_regs.h"
@@ -175,11 +174,9 @@ ohci1394_hard_reset(OHCI1394State *s)
 	uint8_t bytes[4];
     } guid_lo;
 
-    /* Construct GUID from MAC address */
-    memcpy(&guid_hi.bytes[0], &s->conf.macaddr.a[0], 3);
-    guid_hi.bytes[3] = 0;
-    guid_lo.bytes[0] = 0;
-    memcpy(&guid_lo.bytes[1], &s->conf.macaddr.a[3], 3);
+    // HACK
+    guid_hi.be32 = random();
+    guid_lo.be32 = random();
 
     /* Set hard-reset initial values */
     s->version = OHCI1394_VERSION_VERSION_1_1;
@@ -289,21 +286,6 @@ ohci1394_dma_wake(OHCI1394State *s, OHCI1394DmaContext *c)
 	c->command_ptr = branch_address;
 }
 
-//
-static void
-firewire_transmit(OHCI1394State *s, FireWireHeader *header, size_t header_len,
-		  void *data, size_t len)
-{
-    unsigned int i;
-    uint8_t *bytes = data;
-
-    for (i = 0; i < (header_len/4); i++)
-	DBG("TXH: %08x\n", be32_to_cpu(header->raw[i]));
-    for (i = 0; i < len; i += 4)
-	DBG("TXD: %02x%02x%02x%02x\n", bytes[i + 0], bytes[i + 1],
-	    bytes[i + 2], bytes[i + 3]);
-}
-
 static size_t
 ohci1394_demangle_header(OHCI1394State *s, const OHCI1394MangledHeader *mangled,
 			 OHCI1394DemangledHeader *demangled, size_t len)
@@ -318,7 +300,7 @@ ohci1394_demangle_header(OHCI1394State *s, const OHCI1394MangledHeader *mangled,
 
     /* Handle PHY packets */
     tcode = OHCI1394_TCODE_GET(le16_to_cpu(mangled->control));
-    if (tcode == TCODE_LINK_INTERNAL) {
+    if (tcode == OHCI1394_TCODE_PHY) {
 	demangled->quadlet[0] = demangled->quadlet[1];
 	demangled->quadlet[1] = demangled->quadlet[2];
 	return (2 * sizeof(uint32_t));
@@ -484,69 +466,6 @@ ohci1394_dma_receive(OHCI1394State *s, OHCI1394DmaContext *c)
 {
     ohci1394_dma_die(s, c, OHCI1394_EVT_UNKNOWN);
 }
-
-/*
- * Network device (FireWire-over-Ethernet) interface
- *
- */
-
-static int
-ohci1394_can_receive(NetClientState *nc)
-{
-    OHCI1394State *s = qemu_get_nic_opaque(nc);
-
-    return ((s->hc_control & OHCI1394_HC_CONTROL_LINK_ENABLE) &&
-	    (s->hc_control & OHCI1394_HC_CONTROL_LPS));
-}
-
-static ssize_t
-ohci1394_receive_iov(NetClientState *nc, const struct iovec *iov, int iovcnt)
-{
-
-    //
-    return -1;
-}
-
-static ssize_t
-ohci1394_receive(NetClientState *nc, const uint8_t *buf, size_t len)
-{
-    const struct iovec iov = {
-	.iov_base = (uint8_t *)buf,
-	.iov_len = len,
-    };
-
-    return ohci1394_receive_iov(nc, &iov, 1);
-}
-
-static void
-ohci1394_set_link_status(NetClientState *nc)
-{
-    OHCI1394State *s = qemu_get_nic_opaque(nc);
-
-    DBG("link is %s\n", (nc->link_down ? "down" : "up"));
-    s->node_id &= ~OHCI1394_NODE_ID_CPS;
-    if (!nc->link_down)
-	s->node_id |= OHCI1394_NODE_ID_CPS;
-    ohci1394_bus_reset(s);
-}
-
-static void
-ohci1394_cleanup(NetClientState *nc)
-{
-    OHCI1394State *s = qemu_get_nic_opaque(nc);
-
-    s->nic = NULL;
-}
-
-static NetClientInfo ohci1394_net_info = {
-    .type = NET_CLIENT_OPTIONS_KIND_NIC,
-    .size = sizeof(NICState),
-    .can_receive = ohci1394_can_receive,
-    .receive_iov = ohci1394_receive_iov,
-    .receive = ohci1394_receive,
-    .link_status_changed = ohci1394_set_link_status,
-    .cleanup = ohci1394_cleanup,
-};
 
 /*
  * PHY register operations 
@@ -887,21 +806,17 @@ pci_ohci1394_init(PCIDevice *dev)
 	s->isoch_rx[i].intr_buffer = (1 << i);
     }
 
-    /* Register network device */
-    qemu_macaddr_default_if_unset(&s->conf.macaddr);
-    s->nic = qemu_new_nic(&ohci1394_net_info, &s->conf,
-			  object_get_typename(OBJECT(s)), d->id, s);
-    qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
+    /* Register FireWire device */
+    firewire_bus_new(&s->bus, d);
+    for (i = 0; i < OHCI1394_PORTS; i++)
+	firewire_register_port(&s->bus, &s->port[i], i);
 
     return 0;
 }
 
 static void
-pci_ohci1394_uninit(PCIDevice *dev)
+pci_ohci1394_exit(PCIDevice *dev)
 {
-    OHCI1394State *s = OHCI1394(dev);
-
-    printf("*** OHCI1394 uninit %p\n", s);
 }
 
 static void
@@ -909,7 +824,6 @@ ohci1394_reset(DeviceState *d)
 {
     OHCI1394State *s = OHCI1394(d);
     ohci1394_hard_reset(s);
-    ohci1394_set_link_status(qemu_get_queue(s->nic));
 };
 
 static const VMStateDescription vmstate_ohci1394_shadowed = {
@@ -968,7 +882,6 @@ static const VMStateDescription vmstate_ohci1394 = {
     .minimum_version_id = 1,
     .fields = (VMStateField[]) {
 	VMSTATE_PCI_DEVICE(pci, OHCI1394State),
-	VMSTATE_MACADDR(conf.macaddr, OHCI1394State),
 	VMSTATE_UINT8(phy_reset, OHCI1394State),
 	VMSTATE_UINT8(phy_link, OHCI1394State),
 	VMSTATE_UINT8(phy_misc, OHCI1394State),
@@ -1019,7 +932,6 @@ static const VMStateDescription vmstate_ohci1394 = {
 };
 
 static Property ohci1394_properties[] = {
-    DEFINE_NIC_PROPERTIES(OHCI1394State, conf),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -1031,7 +943,7 @@ ohci1394_class_init(ObjectClass *klass, void *data)
 
     /* Initialise class */
     k->init = pci_ohci1394_init;
-    k->exit = pci_ohci1394_uninit;
+    k->exit = pci_ohci1394_exit;
     k->vendor_id = PCI_VENDOR_ID_QEMU;
     k->device_id = PCI_DEVICE_ID_QEMU_OHCI1394;
     k->class_id = PCI_CLASS_SERIAL_FIREWIRE;

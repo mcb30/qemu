@@ -1,2 +1,4 @@
+common-obj-y += bus.o
+
 common-obj-$(CONFIG_OHCI1394_PCI) += ohci1394.o
 common-obj-$(CONFIG_OHCI1394_PCI) += ohci1394_regs.o

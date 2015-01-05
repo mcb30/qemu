@@ -23,15 +23,16 @@
 #ifndef _OHCI1394_H_
 #define _OHCI1394_H_
 
-#include <stdint.h>
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
-#include "net/net.h"
+#include "hw/firewire.h"
 
 /*
  * Device state
  *
  */
+
+#define OHCI1394_PORTS 9
 
 #define OHCI1394_ISOCH_TX_CONTEXTS 8
 
@@ -78,12 +79,10 @@ struct OHCI1394DmaContext {
 };
 
 struct OHCI1394State {
-    /*< private >*/
     PCIDevice pci;
-    /*< public >*/
+    FireWireBus bus;
+    FireWirePort port[OHCI1394_PORTS];
 
-    NICState *nic;
-    NICConf conf;
     MemoryRegion bar_mem;
 
     /* PHY registers, in (page,address) order */

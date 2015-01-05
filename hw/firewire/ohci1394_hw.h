@@ -23,7 +23,7 @@
 #ifndef _OHCI1394_HW_H_
 #define _OHCI1394_HW_H_
 
-#include "firewire.h"
+#include "hw/firewire.h"
 
 /*
  * PCI details
@@ -619,6 +619,8 @@ typedef union QEMU_PACKED OHCI1394DmaProgram {
 #define OHCI1394_INSN_STORE_VALUE			\
 	(OHCI1394_INSN_CMD_STORE_VALUE |		\
 	 OHCI1394_INSN_KEY_STORE_VALUE)
+
+#define OHCI1394_TCODE_PHY				0x0e
 
 #define OHCI1394_TCODE_GET(x)				\
 	(((x) >> 4) & 0xf)
